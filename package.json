@@ -1,0 +1,18 @@
+{
+  "name": "blitz-telegram-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/index.js",
+    "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 'test/*.test.js'"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.5",
+    "light-bolt11-decoder": "^3.2.0",
+    "nostr-tools": "^2.25.2"
+  }
+}

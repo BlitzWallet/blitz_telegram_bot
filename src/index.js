@@ -1,0 +1,109 @@
+import { createHmac } from 'node:crypto';
+import { SimplePool } from 'nostr-tools/pool';
+import { createBot } from './bot.js';
+import { loadConfig } from './config.js';
+import { createKeyring } from './crypto.js';
+import { openDb } from './db.js';
+import { createLogger, redact } from './log.js';
+import { createNwcClient } from './nwc.js';
+import { createTelegram } from './telegram.js';
+
+// Re-encrypts every stored secret under the primary key so old keys can be
+// retired after one successful start.
+export function rotateKeys(store, keyring, log) {
+  let rotated = 0;
+  for (const row of store.walletsNotUnderKey(keyring.primaryId)) {
+    const aad = `${row.user_id}:${row.wallet_pubkey}`;
+    try {
+      store.updateSecret(
+        row.user_id,
+        keyring.encrypt(keyring.decrypt(row.secret_enc, aad), aad),
+      );
+      rotated++;
+    } catch (err) {
+      log.error('cannot re-encrypt wallet secret (key missing?)', {
+        user: log.user(row.user_id),
+        err,
+      });
+    }
+  }
+  return rotated;
+}
+
+async function main() {
+  const config = loadConfig();
+  const log = createLogger({
+    level: config.logLevel,
+    pseudonymKey: createHmac('sha256', config.encryptionKeys[0].key)
+      .update('log-pseudonym')
+      .digest(),
+  });
+  // Route anything unexpected through the redacting logger instead of Node's
+  // default stack dump to stderr.
+  process.on('unhandledRejection', err =>
+    log.error('unhandled rejection', { err }),
+  );
+  process.on('uncaughtException', err => {
+    log.error('uncaught exception', { err });
+    process.exit(1);
+  });
+  const store = openDb(config.databasePath);
+  const keyring = createKeyring(config.encryptionKeys);
+
+  const rotated = rotateKeys(store, keyring, log);
+  const recovered = store.recoverSubmitting(Date.now());
+  log.info('starting', { rotated, recoveredPayments: recovered });
+
+  const pool = new SimplePool();
+  const nwc = createNwcClient({ pool, allowedRelays: config.allowedRelays });
+  const tg = createTelegram({ token: config.telegramToken, log });
+  const me = await tg.call('getMe');
+  config.botUsername = me.username; // shown in Blitz's approval screen
+  const bot = createBot({ tg, store, nwc, keyring, config, log });
+
+  await tg.call('deleteWebhook', { drop_pending_updates: false });
+  await tg
+    .call('setMyCommands', {
+      commands: [
+        ['balance', 'Wallet Connect balance'],
+        ['receive', 'Create an invoice: /receive 21000 memo'],
+        ['send', 'Pay a Lightning invoice'],
+        ['transactions', 'Recent activity'],
+        ['status', 'Tracked payments and invoices'],
+        ['connect', 'Connect your Blitz Wallet'],
+        ['disconnect', 'Remove your wallet from this bot'],
+        ['help', 'Help and safety tips'],
+      ].map(([command, description]) => ({ command, description })),
+    })
+    .catch(err => log.warn('setMyCommands failed', { err }));
+  log.info('telegram ready', { bot: me.username });
+
+  const abort = new AbortController();
+  const maintenance = setInterval(() => bot.runMaintenance(), 30_000);
+  bot.runMaintenance();
+  const polling = tg.poll(update => bot.handleUpdate(update), abort.signal);
+
+  let stopping = false;
+  const shutdown = async signal => {
+    if (stopping) return;
+    stopping = true;
+    log.info('shutting down', { signal });
+    clearInterval(maintenance);
+    abort.abort();
+    await polling;
+    await bot.drain(10_000);
+    pool.destroy();
+    store.close();
+    log.info('stopped');
+    process.exit(0);
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch(err => {
+    process.stderr.write(`fatal: ${redact(err.message)}\n`);
+    process.exit(1);
+  });
+}
