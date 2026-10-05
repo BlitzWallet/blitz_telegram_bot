@@ -126,7 +126,7 @@ Payments always show amount, the recipient's memo and expiry, and require
   of a server-side NWC client; it is bounded by Blitz budgets. See incident
   response below.
 - **Telegram account takeover:** can read balance/history and create invoices;
-  paying additionally requires the PIN (5 wrong tries lock payments for 1 h).
+  paying additionally requires the PIN (10 wrong tries, then locks of 1 min, 5 min, 15 min, 30 min, 1 h, 5 h and 24 h, then sending is off until re-pairing).
 - **Relay:** sees metadata only; cannot read, forge or successfully replay.
 - Secrets are never logged, never echoed to users, never in URLs or command-line
   arguments; logs use HMAC pseudonyms instead of Telegram ids.

@@ -58,19 +58,19 @@
   "pin": {
     "expired": "This keypad has expired.",
     "cancel_payment": "Payment cancelled. Nothing was sent.",
-    "cancel_setup": "PIN setup cancelled. You’ll be asked to set a PIN before your first payment.",
-    "weak": "That PIN is too easy to guess. Choose a different 6-digit PIN.",
+    "cancel_setup": "PIN setup cancelled. Sending stays off until a PIN is set: use /disconnect and connect again.",
+    "weak": "That PIN is too easy to guess (repeats, sequences, patterns or dates). Choose a different 6-digit PIN.",
     "repeat_prompt": "Enter the same PIN again to confirm.",
     "mismatch": "The PINs didn’t match. Choose a 6-digit PIN.",
     "set_done": "🔐 Payment PIN set. Paste a Lightning invoice any time to pay it.",
-    "first_payment_prompt": "Before your first payment, choose a 6-digit <b>payment PIN</b>. Then send the invoice again.",
     "pay_prompt": "Enter your PIN to pay <b>{{amount}} sats</b>.",
-    "locked_try_later": "Payments are locked after too many wrong PINs. Try again in {{minutes}} min.",
+    "locked_try_later": "Payments are locked after too many wrong PINs. Try again in {{duration}}.",
     "locked_nothing_sent": "Payments are locked after too many wrong PINs. Nothing was sent.",
-    "too_many_locked": "Too many wrong PINs. Payments are locked for 1 hour. Nothing was sent.\nForgot your PIN? Use /disconnect and connect again.",
+    "too_many_locked": "Too many wrong PINs. Payments are locked for {{duration}}. Nothing was sent.\nEach further wrong PIN locks longer, and eventually turns sending off.\nForgot your PIN? Use /disconnect and connect again.",
     "wrong_remaining_one": "Wrong PIN. 1 attempt left before payments are locked.",
     "wrong_remaining_other": "Wrong PIN. {{count}} attempts left before payments are locked.",
-    "cancel_button": "✖ Cancel"
+    "cancel_button": "✖ Cancel",
+    "disabled": "Too many wrong PINs. Sending is now off for this connection. Nothing was sent.\nIf this wasn’t you, delete the Telegram connection in Blitz now. To send again, use /disconnect and connect again."
   },
   "send": {
     "paste_prompt": "Paste the Lightning invoice you want to pay.",
@@ -109,7 +109,8 @@
     "fail_UNAUTHORIZED": "The connection was removed in Blitz.",
     "fail_RATE_LIMITED": "The wallet is busy; try again in a moment.",
     "fail_NOT_SENT": "The wallet never received the request in time.",
-    "fail_default": "The payment didn’t go through."
+    "fail_default": "The payment didn’t go through.",
+    "no_pin": "Sending is off because this connection has no payment PIN. To turn it on, use /disconnect and connect again, then choose a PIN."
   },
   "receive": {
     "not_enabled": "Receiving isn’t enabled for this connection (enable Receive payments in Blitz and /connect again).",

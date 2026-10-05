@@ -58,19 +58,19 @@
   "pin": {
     "expired": "Dieses Tastenfeld ist abgelaufen.",
     "cancel_payment": "Zahlung abgebrochen. Es wurde nichts gesendet.",
-    "cancel_setup": "PIN-Einrichtung abgebrochen. Du wirst vor deiner ersten Zahlung zur PIN-Einrichtung aufgefordert.",
-    "weak": "Diese PIN ist zu leicht zu erraten. Wähle eine andere 6-stellige PIN.",
+    "cancel_setup": "PIN-Einrichtung abgebrochen. Senden bleibt aus, bis eine PIN gesetzt ist: Nutze /disconnect und verbinde dich erneut.",
+    "weak": "Diese PIN ist zu leicht zu erraten (Wiederholungen, Folgen, Muster oder Daten). Wähle eine andere 6-stellige PIN.",
     "repeat_prompt": "Gib dieselbe PIN zur Bestätigung erneut ein.",
     "mismatch": "Die PINs stimmten nicht überein. Wähle eine 6-stellige PIN.",
     "set_done": "🔐 Zahlungs-PIN gesetzt. Füge jederzeit eine Lightning-Rechnung ein, um sie zu bezahlen.",
-    "first_payment_prompt": "Wähle vor deiner ersten Zahlung eine 6-stellige <b>Zahlungs-PIN</b>. Sende danach die Rechnung erneut.",
     "pay_prompt": "Gib deine PIN ein, um <b>{{amount}} Sats</b> zu zahlen.",
-    "locked_try_later": "Zahlungen sind nach zu vielen falschen PINs gesperrt. Versuch es in {{minutes}} Min. erneut.",
+    "locked_try_later": "Zahlungen sind nach zu vielen falschen PINs gesperrt. Versuch es in {{duration}} erneut.",
     "locked_nothing_sent": "Zahlungen sind nach zu vielen falschen PINs gesperrt. Es wurde nichts gesendet.",
-    "too_many_locked": "Zu viele falsche PINs. Zahlungen sind für 1 Stunde gesperrt. Es wurde nichts gesendet.\nPIN vergessen? Nutze /disconnect und verbinde dich erneut.",
+    "too_many_locked": "Zu viele falsche PINs. Zahlungen sind für {{duration}} gesperrt. Es wurde nichts gesendet.\nJede weitere falsche PIN sperrt länger und schaltet Senden schließlich ab.\nPIN vergessen? Nutze /disconnect und verbinde dich erneut.",
     "wrong_remaining_one": "Falsche PIN. Noch 1 Versuch, bevor Zahlungen gesperrt werden.",
     "wrong_remaining_other": "Falsche PIN. Noch {{count}} Versuche, bevor Zahlungen gesperrt werden.",
-    "cancel_button": "✖ Abbrechen"
+    "cancel_button": "✖ Abbrechen",
+    "disabled": "Zu viele falsche PINs. Senden ist für diese Verbindung jetzt abgeschaltet. Es wurde nichts gesendet.\nWarst du das nicht, lösche die Telegram-Verbindung sofort in Blitz. Um wieder zu senden, nutze /disconnect und verbinde dich erneut."
   },
   "send": {
     "paste_prompt": "Füge die Lightning-Rechnung ein, die du bezahlen möchtest.",
@@ -109,7 +109,8 @@
     "fail_UNAUTHORIZED": "Die Verbindung wurde in Blitz entfernt.",
     "fail_RATE_LIMITED": "Die Wallet ist beschäftigt; versuch es gleich erneut.",
     "fail_NOT_SENT": "Die Wallet hat die Anfrage nie rechtzeitig erhalten.",
-    "fail_default": "Die Zahlung ging nicht durch."
+    "fail_default": "Die Zahlung ging nicht durch.",
+    "no_pin": "Senden ist aus, weil diese Verbindung keine Zahlungs-PIN hat. Zum Einschalten nutze /disconnect, verbinde dich erneut und wähle eine PIN."
   },
   "receive": {
     "not_enabled": "Empfangen ist für diese Verbindung nicht aktiviert (aktiviere Zahlungen empfangen in Blitz und verbinde dich mit /connect erneut).",

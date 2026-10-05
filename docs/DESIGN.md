@@ -133,13 +133,17 @@ these mitigations:
    callback queries, not messages, so the PIN never appears in chat history —
    a later Telegram account takeover cannot read it from history.
 5. Forgotten PIN = `/disconnect` and connect again with a connection string,
-   i.e. PIN reset requires access to the Blitz app.
+   i.e. PIN reset requires access to the Blitz app. A connection without a
+   PIN (setup cancelled or expired) cannot send; setting one also needs a
+   fresh pairing.
+6. Guessable PINs (repeats, sequences, keypad patterns, dates) are rejected.
 
 **Telegram account compromise:** attacker can read balance/history and create
-invoices; to pay they also need the PIN (5 wrong attempts → payments locked for
-1 h, persisted). They cannot raise the budget. Response: user deletes the
-connection in Blitz (instant, total revocation) and terminates Telegram
-sessions.
+invoices; to pay they also need the PIN (10 wrong tries, then locks of 1 min,
+5 min, 15 min, 30 min, 1 h, 5 h and 24 h, then sending is off until
+re-pairing; persisted, only a correct PIN resets the count; 17 guesses in
+total). They cannot raise the budget. Response: user deletes the connection
+in Blitz (instant, total revocation) and terminates Telegram sessions.
 
 **Bot token compromise:** attacker can impersonate the bot and race
 `getUpdates` to read incoming messages (including a connection string pasted at
@@ -173,7 +177,10 @@ connections.
   irreducible residual risk of any server-side NWC client. Bounded by wallet
   budgets; remedied only by users deleting connections in Blitz. Incident
   procedure in README.
-- PIN: scrypt (N=2^15, r=8, p=1, 16-byte salt), compared in constant time. It
+- PIN: scrypt (N=2^15, r=8, p=1, 16-byte salt), compared in constant time,
+  and the hash is stored AES-GCM-encrypted with the keyring (AAD
+  `pin:<user>:<wallet pubkey>`), so a stolen database alone cannot be
+  brute-forced offline. It
   is a bot-side gate only; it does not encrypt anything (deriving keys from it
   would block read-only commands and not stop a live-server attacker who can
   capture PINs).
@@ -321,7 +328,7 @@ the wallet row and all of the user's payments and invoices immediately
   user's phone). Global cap of 100 concurrent wallet requests.
 - One pending payment confirmation per user (a new one supersedes the old),
   which also bounds rows created by invoice spam.
-- PIN lockout (5 failures → 1 h), persisted.
+- PIN lockout (10 wrong tries, then locks of 1 min, 5 min, 15 min, 30 min, 1 h, 5 h and 24 h, then sending is off until re-pairing), persisted.
 - One in-flight payment per user; 5 open invoices per user.
 - Confirmations expire after 2 minutes; callbacks validated by owner + state.
 - Optional `ALLOWED_TELEGRAM_USER_IDS` for private deployments.
@@ -382,7 +389,7 @@ everything); (4) bot process ↔ its DB/key/env (DB alone is not enough; DB + ke
 |---|---|---|---|---|---|
 | NWC secret | DB thief | Read DB/backup | None without key | AES-GCM, key outside DB | Metadata exposure (ids, amounts, hashes ≤ 7 days) |
 | NWC secrets (all users) | Server root / DB+key | Sign requests | Spend ≤ each user's budget & WC balance; read history | Wallet budgets, separate sub-wallet, minimal permissions, key via secret file, incident runbook | **Real; bounded by budgets** |
-| One user's funds | Telegram account taker | Use bot | Read balance/history; pay needs PIN | PIN on keypad (not in history), lockout, bot cap, wallet budget | PIN guessing limited to 5/h |
+| One user's funds | Telegram account taker | Use bot | Read balance/history; pay needs PIN | PIN on keypad (not in history), lockout, bot cap, wallet budget | 17 PIN guesses total, then sending is off until re-pairing |
 | NWC secret | Telegram (company) / retention | Read pasted string | Use connection outside bot | Immediate delete, dedicated budgeted connection, NWC-08 follow-up | Until user deletes connection |
 | Incoming updates | Bot-token thief | Race getUpdates | Read pasted strings/PIN taps; impersonate bot | Token via secret file, never logged; revoke in BotFather | Window until revoked |
 | Payments | Relay | Drop/delay/replay | DoS; no forgery | Signatures, e/p/author checks, `expiration`, wallet dedupe | DoS |

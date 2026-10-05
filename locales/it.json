@@ -58,19 +58,19 @@
   "pin": {
     "expired": "Questo tastierino è scaduto.",
     "cancel_payment": "Pagamento annullato. Non è stato inviato nulla.",
-    "cancel_setup": "Configurazione PIN annullata. Ti verrà chiesto di impostare un PIN prima del primo pagamento.",
-    "weak": "Quel PIN è troppo facile da indovinare. Scegli un altro PIN di 6 cifre.",
+    "cancel_setup": "Configurazione PIN annullata. L’invio resta disattivato finché non imposti un PIN: usa /disconnect e collegati di nuovo.",
+    "weak": "Quel PIN è troppo facile da indovinare (ripetizioni, sequenze, schemi o date). Scegli un altro PIN di 6 cifre.",
     "repeat_prompt": "Inserisci di nuovo lo stesso PIN per confermare.",
     "mismatch": "I PIN non corrispondevano. Scegli un PIN di 6 cifre.",
     "set_done": "🔐 PIN di pagamento impostato. Incolla una fattura Lightning in qualsiasi momento per pagarla.",
-    "first_payment_prompt": "Prima del primo pagamento, scegli un <b>PIN di pagamento</b> di 6 cifre. Poi invia di nuovo la fattura.",
     "pay_prompt": "Inserisci il tuo PIN per pagare <b>{{amount}} sat</b>.",
-    "locked_try_later": "I pagamenti sono bloccati dopo troppi PIN errati. Riprova tra {{minutes}} min.",
+    "locked_try_later": "I pagamenti sono bloccati dopo troppi PIN errati. Riprova tra {{duration}}.",
     "locked_nothing_sent": "I pagamenti sono bloccati dopo troppi PIN errati. Non è stato inviato nulla.",
-    "too_many_locked": "Troppi PIN errati. Pagamenti bloccati per 1 ora. Non è stato inviato nulla.\nHai dimenticato il PIN? Usa /disconnect e collegati di nuovo.",
+    "too_many_locked": "Troppi PIN errati. Pagamenti bloccati per {{duration}}. Non è stato inviato nulla.\nOgni altro PIN errato blocca più a lungo e alla fine disattiva l’invio.\nHai dimenticato il PIN? Usa /disconnect e collegati di nuovo.",
     "wrong_remaining_one": "PIN errato. 1 tentativo rimasto prima del blocco dei pagamenti.",
     "wrong_remaining_other": "PIN errato. {{count}} tentativi rimasti prima del blocco dei pagamenti.",
-    "cancel_button": "✖ Annulla"
+    "cancel_button": "✖ Annulla",
+    "disabled": "Troppi PIN errati. L’invio è ora disattivato per questa connessione. Non è stato inviato nulla.\nSe non sei stato tu, elimina subito la connessione Telegram in Blitz. Per inviare di nuovo, usa /disconnect e collegati di nuovo."
   },
   "send": {
     "paste_prompt": "Incolla la fattura Lightning che vuoi pagare.",
@@ -109,7 +109,8 @@
     "fail_UNAUTHORIZED": "La connessione è stata rimossa in Blitz.",
     "fail_RATE_LIMITED": "Il wallet è occupato; riprova tra un momento.",
     "fail_NOT_SENT": "Il wallet non ha mai ricevuto la richiesta in tempo.",
-    "fail_default": "Il pagamento non è andato a buon fine."
+    "fail_default": "Il pagamento non è andato a buon fine.",
+    "no_pin": "L’invio è disattivato perché questa connessione non ha un PIN di pagamento. Per attivarlo, usa /disconnect, collegati di nuovo e scegli un PIN."
   },
   "receive": {
     "not_enabled": "La ricezione non è attiva per questa connessione (attiva Ricevere pagamenti in Blitz e rifai /connect).",

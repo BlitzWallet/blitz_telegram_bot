@@ -102,7 +102,13 @@ test('connect: stores only an encrypted secret, deletes the message, sets a PIN'
     h.keyring.decrypt(row.secret_enc, `${ALICE}:${h.wallet.pubkey}`),
     h.wallet.clientSecret,
   );
-  assert.ok(row.pin_hash?.startsWith('scrypt.'));
+  // Encrypted with the server key: a leaked database cannot be cracked alone.
+  assert.ok(row.pin_hash?.startsWith('v1.'));
+  assert.ok(
+    h.keyring
+      .decrypt(row.pin_hash, `pin:${ALICE}:${h.wallet.pubkey}`)
+      .startsWith('scrypt.'),
+  );
   assert.match(h.tg.lastText(), /PIN set/);
   assert.equal(h.wallet.requests[0].method, 'get_info');
 });
@@ -135,6 +141,17 @@ test('connect: weak and mismatched PINs are rejected', async () => {
   await h.enterPin(ALICE, '482914');
   assert.match(h.tg.lastText(), /didn’t match/);
   assert.equal(h.store.getWallet(ALICE).pin_hash, null);
+});
+
+test('connect: without a PIN, sending stays off until re-pairing', async () => {
+  const h = createHarness({ wallet: payingWallet() });
+  await h.connect(ALICE, null);
+  await h.enterPin(ALICE, 'x'); // cancel the setup keypad
+  assert.match(h.tg.lastText(), /Sending stays off/);
+  await h.say(ALICE, newInvoice(h.wallet).invoice);
+  assert.match(h.tg.lastText(), /Sending is off/);
+  assert.ok(!h.tg.button('pc:'), 'no confirmation');
+  assert.equal(payRequests(h.wallet).length, 0);
 });
 
 test('connect: receive-only connection disables sending', async () => {
@@ -529,30 +546,63 @@ test('payment: restart during payment resumes as unknown and reconciles', async 
   assert.equal(h2.store.getPayment(id2, ALICE).status, 'paid');
 });
 
-test('payment: wrong PINs lock payments and cancel the attempt', async () => {
+test('payment: wrong PINs escalate lockouts, then turn sending off', async () => {
+  const h = createHarness({ wallet: payingWallet() });
+  await h.connect(ALICE);
+  const attempt = async () => {
+    h.clock.now += 1000;
+    await h.say(
+      ALICE,
+      newInvoice(h.wallet, 21000, {
+        timestamp: Math.floor(h.clock.now / 1000),
+      }).invoice,
+    );
+    await h.pressButton(ALICE, 'pc:');
+  };
+  await attempt();
+  for (let i = 0; i < LIMITS.pinFreeFailures - 1; i++) {
+    h.clock.now += 20_000; // under the update rate limit, inside the keypad TTL
+    await h.enterPin(ALICE, '000001');
+    assert.match(h.tg.lastText(), /Wrong PIN/);
+  }
+  const expected = ['1 min', '5 min', '15 min', '30 min', '1 hr', '5 hr', '24 hr'];
+  for (const [i, lockMs] of LIMITS.pinLocksMs.entries()) {
+    await h.enterPin(ALICE, '000001');
+    assert.match(h.tg.lastText(), new RegExp(`locked for ${expected[i]}\\.`));
+    await attempt();
+    assert.match(h.tg.lastText(), /Try again in/);
+    h.clock.now += lockMs;
+    await attempt();
+  }
+  await h.enterPin(ALICE, '000001');
+  assert.match(h.tg.lastText(), /Sending is now off/);
+  assert.equal(h.store.getWallet(ALICE).pin_hash, null);
+  await h.say(ALICE, newInvoice(h.wallet).invoice);
+  assert.match(h.tg.lastText(), /Sending is off/);
+  assert.equal(payRequests(h.wallet).length, 0);
+
+  // Re-pairing is the only way back.
+  await h.say(ALICE, '/disconnect');
+  await h.pressButton(ALICE, 'dc:yes');
+  await h.connect(ALICE);
+  await attempt();
+  await h.enterPin(ALICE, '482913');
+  await h.settle();
+  assert.equal(payRequests(h.wallet).length, 1);
+});
+
+test('payment: a correct PIN resets the failure count', async () => {
   const h = createHarness({ wallet: payingWallet() });
   await h.connect(ALICE);
   await h.say(ALICE, newInvoice(h.wallet).invoice);
   await h.pressButton(ALICE, 'pc:');
-  for (let i = 0; i < LIMITS.pinMaxFailures - 1; i++) {
-    h.clock.now += 60_000; // keep the per-user update rate limit out of the way
+  for (let i = 0; i < LIMITS.pinFreeFailures - 1; i++) {
+    h.clock.now += 20_000; // under the update rate limit, inside the keypad TTL
     await h.enterPin(ALICE, '000001');
-    assert.match(h.tg.lastText(), /Wrong PIN/);
   }
-  await h.enterPin(ALICE, '000001');
-  assert.match(h.tg.lastText(), /locked for 1 hour/);
-  await h.say(ALICE, newInvoice(h.wallet).invoice);
-  await h.pressButton(ALICE, 'pc:');
-  assert.match(h.tg.lastText(), /locked/);
-  assert.equal(payRequests(h.wallet).length, 0);
-  h.clock.now += LIMITS.pinLockMs + 1;
-  await pay(
-    h,
-    ALICE,
-    newInvoice(h.wallet, 21000, { timestamp: Math.floor(h.clock.now / 1000) })
-      .invoice,
-  );
-  assert.equal(payRequests(h.wallet).length, 1);
+  await h.enterPin(ALICE, '482913');
+  await h.settle();
+  assert.equal(h.store.getWallet(ALICE).pin_failures, 0);
 });
 
 test('payment: revoked connection reports a clear, non-failed state', async () => {

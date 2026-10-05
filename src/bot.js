@@ -38,8 +38,11 @@ export const LIMITS = {
   txPageSize: 10,
   txMaxPages: 20,
   pinLength: 6,
-  pinMaxFailures: 5,
-  pinLockMs: 60 * MIN,
+  // Wrong PINs are free up to pinFreeFailures; then each further one locks
+  // payments for the next step, and one more after the last step turns
+  // sending off until the user re-pairs (only a correct PIN resets the count).
+  pinFreeFailures: 10,
+  pinLocksMs: [1, 5, 15, 30, 60, 300, 1440].map(m => m * MIN),
   pinSessionMs: 5 * MIN,
   retentionMs: 7 * 24 * 60 * MIN,
   maxConcurrentWalletCalls: 100,
@@ -159,10 +162,44 @@ const shortWalletId = pubkey =>
 const fmtDate = sec =>
   new Date(sec * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 const minutesUntil = (ms, now) => Math.max(0, Math.round((ms - now) / MIN));
-const isWeakPin = pin =>
-  /^(\d)\1+$/.test(pin) ||
-  '0123456789'.includes(pin) ||
-  '9876543210'.includes(pin);
+// Localized "5 minutes" / "5 Stunden", rounded up.
+const fmtDuration = (ms, locale = 'en') => {
+  const m = Math.max(1, Math.ceil(ms / MIN));
+  const [value, unit] = m < 60 ? [m, 'minute'] : [Math.ceil(m / 60), 'hour'];
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: 'unit',
+      unit,
+      unitDisplay: 'short',
+    }).format(value);
+  } catch {
+    return `${value} ${unit}${value === 1 ? '' : 's'}`;
+  }
+};
+// Few guesses are allowed before sending is turned off, so reject what an
+// attacker would try first: repeats, sequences, keypad patterns and dates.
+const COMMON_PINS = new Set([
+  '147258', '258369', '369258', '147852', '159753', '753951', '789456',
+  '456789', '102030', '010203', '000123', '123000', '520520', '131420',
+]);
+const isDate = (day, month) => day >= 1 && day <= 31 && month >= 1 && month <= 12;
+export const isWeakPin = pin => {
+  const [a, b, c] = [0, 2, 4].map(i => Number(pin.slice(i, i + 2)));
+  return (
+    /^(\d)\1+$/.test(pin) ||
+    /^(\d\d)\1\1$/.test(pin) || // 121212
+    /^(\d{3})\1$/.test(pin) || // 123123
+    /^(\d)\1(\d)\2(\d)\3$/.test(pin) || // 112233
+    /^(\d)(\d)(\d)\3\2\1$/.test(pin) || // 123321
+    '0123456789'.includes(pin) ||
+    '9876543210'.includes(pin) ||
+    COMMON_PINS.has(pin) ||
+    isDate(a, b) || // DDMMYY
+    isDate(b, a) || // MMDDYY
+    isDate(c, b) || // YYMMDD
+    /^(0[1-9]|1[0-2])(19|20)\d\d$/.test(pin) // MMYYYY
+  );
+};
 
 function bucket(capacity, perMinute) {
   return { capacity, refillPerMs: perMinute / MIN };
@@ -311,6 +348,9 @@ export function createBot({
   }
 
   const aad = (userId, walletPubkey) => `${userId}:${walletPubkey}`;
+  // The scrypt hash is encrypted with the server key too, so a database leak
+  // alone cannot be brute-forced offline (M3).
+  const pinAad = wallet => `pin:${wallet.user_id}:${wallet.wallet_pubkey}`;
   const methodsOf = wallet => new Set(wallet.methods.split(' '));
   const connFor = wallet => ({
     walletPubkey: wallet.wallet_pubkey,
@@ -858,9 +898,9 @@ export function createBot({
         );
       }
       pinSessions.delete(userId);
-      if (!store.getWallet(userId))
-        return edit(userId, messageId, t('common.wallet_gone'));
-      store.setPin(userId, await hashPin(pin));
+      const wallet = store.getWallet(userId);
+      if (!wallet) return edit(userId, messageId, t('common.wallet_gone'));
+      store.setPin(userId, keyring.encrypt(await hashPin(pin), pinAad(wallet)));
       return edit(userId, messageId, t('pin.set_done'));
     }
     // purpose === 'pay'
@@ -877,13 +917,9 @@ export function createBot({
     if (!can.has('pay_invoice') || !can.has('lookup_invoice')) {
       return send(userId, t('send.not_enabled'));
     }
-    if (!wallet.pin_hash) {
-      return startPinSession(
-        userId,
-        { purpose: 'set' },
-        t('pin.first_payment_prompt'),
-      );
-    }
+    // No PIN means sending is off: setting one needs a fresh pairing, which
+    // proves access to the Blitz app, not just to this Telegram account.
+    if (!wallet.pin_hash) return send(userId, t('send.no_pin'));
 
     const raw = findInvoice(text);
     let inv;
@@ -985,14 +1021,17 @@ export function createBot({
       return edit(userId, messageId, t('send.confirm_expired'));
     }
     const wallet = store.getWallet(userId);
-    if (!wallet?.pin_hash)
-      return edit(userId, messageId, t('common.wallet_gone'));
+    if (!wallet) return edit(userId, messageId, t('common.wallet_gone'));
+    if (!wallet.pin_hash) return edit(userId, messageId, t('send.no_pin'));
     if (wallet.pin_locked_until > now()) {
       return edit(
         userId,
         messageId,
         t('pin.locked_try_later', {
-          minutes: minutesUntil(wallet.pin_locked_until, now()),
+          duration: fmtDuration(
+            wallet.pin_locked_until - now(),
+            localeOf(userId),
+          ),
         }),
       );
     }
@@ -1009,28 +1048,52 @@ export function createBot({
     const wallet = store.getWallet(userId);
     if (!wallet?.pin_hash) {
       pinSessions.delete(userId);
-      return edit(userId, messageId, t('common.wallet_gone'));
+      store.cancelPayment(s.paymentId, userId, now());
+      return edit(
+        userId,
+        messageId,
+        t(wallet ? 'send.no_pin' : 'common.wallet_gone'),
+      );
     }
     if (wallet.pin_locked_until > now()) {
       pinSessions.delete(userId);
       store.cancelPayment(s.paymentId, userId, now());
       return edit(userId, messageId, t('pin.locked_nothing_sent'));
     }
-    if (!(await verifyPin(pin, wallet.pin_hash))) {
+    let pinOk;
+    try {
+      pinOk = await verifyPin(pin, keyring.decrypt(wallet.pin_hash, pinAad(wallet)));
+    } catch (err) {
+      log.error('cannot decrypt pin hash', { user: log.user(userId), err });
+      pinSessions.delete(userId);
+      store.cancelPayment(s.paymentId, userId, now());
+      return edit(userId, messageId, t('common.generic_error'));
+    }
+    if (!pinOk) {
       const r = store.recordPinFailure(
         userId,
         now(),
-        LIMITS.pinMaxFailures,
-        LIMITS.pinLockMs,
+        LIMITS.pinFreeFailures,
+        LIMITS.pinLocksMs,
       );
       log.warn('wrong payment pin', {
         user: log.user(userId),
-        locked: r.locked,
+        failures: r.failures,
+        lockedMs: r.lockMs ?? 0,
+        disabled: r.disabled,
       });
-      if (r.locked) {
+      if (r.disabled || r.lockMs) {
         pinSessions.delete(userId);
         store.cancelPayment(s.paymentId, userId, now());
-        return edit(userId, messageId, t('pin.too_many_locked'));
+        return edit(
+          userId,
+          messageId,
+          r.disabled
+            ? t('pin.disabled')
+            : t('pin.too_many_locked', {
+                duration: fmtDuration(r.lockMs, localeOf(userId)),
+              }),
+        );
       }
       s.prompt =
         r.remaining === 1

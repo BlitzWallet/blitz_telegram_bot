@@ -9,16 +9,24 @@ import { createLogger, redact } from './log.js';
 import { createNwcClient } from './nwc.js';
 import { createTelegram } from './telegram.js';
 
-// Re-encrypts every stored secret under the primary key so old keys can be
-// retired after one successful start.
+// Re-encrypts every stored secret and PIN hash under the primary key so old
+// keys can be retired after one successful start. Also encrypts PIN hashes
+// stored in plain `scrypt.` form by older versions.
 export function rotateKeys(store, keyring, log) {
   let rotated = 0;
   for (const row of store.walletsNotUnderKey(keyring.primaryId)) {
     const aad = `${row.user_id}:${row.wallet_pubkey}`;
+    const pinAad = `pin:${aad}`;
+    const reencrypt = (blob, ad) => keyring.encrypt(keyring.decrypt(blob, ad), ad);
     try {
-      store.updateSecret(
+      store.updateSecrets(
         row.user_id,
-        keyring.encrypt(keyring.decrypt(row.secret_enc, aad), aad),
+        reencrypt(row.secret_enc, aad),
+        row.pin_hash === null
+          ? null
+          : row.pin_hash.startsWith('scrypt.')
+            ? keyring.encrypt(row.pin_hash, pinAad)
+            : reencrypt(row.pin_hash, pinAad),
       );
       rotated++;
     } catch (err) {

@@ -58,19 +58,19 @@
   "pin": {
     "expired": "Knappsatsen har gått ut.",
     "cancel_payment": "Betalning avbruten. Inget skickades.",
-    "cancel_setup": "PIN-installation avbruten. Du blir ombedd att ställa in en PIN före första betalningen.",
-    "weak": "PIN-koden är för lätt att gissa. Välj en annan 6-siffrig PIN.",
+    "cancel_setup": "PIN-installation avbruten. Skicka är avstängt tills en PIN är inställd: använd /disconnect och anslut igen.",
+    "weak": "PIN-koden är för lätt att gissa (upprepningar, sekvenser, mönster eller datum). Välj en annan 6-siffrig PIN.",
     "repeat_prompt": "Ange samma PIN igen för att bekräfta.",
     "mismatch": "PIN-koderna stämde inte. Välj en 6-siffrig PIN.",
     "set_done": "🔐 Betal-PIN inställd. Klistra in en Lightning-faktura när som helst för att betala den.",
-    "first_payment_prompt": "Innan din första betalning, välj en 6-siffrig <b>betal-PIN</b>. Skicka sedan fakturan igen.",
     "pay_prompt": "Ange din PIN för att betala <b>{{amount}} sats</b>.",
-    "locked_try_later": "Betalningar är låsta efter för många fel PIN. Försök igen om {{minutes}} min.",
+    "locked_try_later": "Betalningar är låsta efter för många fel PIN. Försök igen om {{duration}}.",
     "locked_nothing_sent": "Betalningar är låsta efter för många fel PIN. Inget skickades.",
-    "too_many_locked": "För många fel PIN. Betalningar låsta i 1 timme. Inget skickades.\nGlömt PIN? Använd /disconnect och anslut igen.",
+    "too_many_locked": "För många fel PIN. Betalningar låsta i {{duration}}. Inget skickades.\nVarje ytterligare fel PIN låser längre och stänger till slut av skicka.\nGlömt PIN? Använd /disconnect och anslut igen.",
     "wrong_remaining_one": "Fel PIN. 1 försök kvar innan betalningar låses.",
     "wrong_remaining_other": "Fel PIN. {{count}} försök kvar innan betalningar låses.",
-    "cancel_button": "✖ Avbryt"
+    "cancel_button": "✖ Avbryt",
+    "disabled": "För många fel PIN. Skicka är nu avstängt för anslutningen. Inget skickades.\nOm det inte var du, radera Telegram-anslutningen i Blitz direkt. För att skicka igen, använd /disconnect och anslut igen."
   },
   "send": {
     "paste_prompt": "Klistra in Lightning-fakturan du vill betala.",
@@ -109,7 +109,8 @@
     "fail_UNAUTHORIZED": "Anslutningen togs bort i Blitz.",
     "fail_RATE_LIMITED": "Walleten är upptagen; försök om ett ögonblick.",
     "fail_NOT_SENT": "Walleten fick aldrig begäran i tid.",
-    "fail_default": "Betalningen gick inte igenom."
+    "fail_default": "Betalningen gick inte igenom.",
+    "no_pin": "Skicka är avstängt eftersom anslutningen saknar betalnings-PIN. Slå på det med /disconnect, anslut igen och välj en PIN."
   },
   "receive": {
     "not_enabled": "Mottagning är inte aktiverat för anslutningen (aktivera Ta emot betalningar i Blitz och kör /connect igen).",

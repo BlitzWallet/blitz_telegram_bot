@@ -134,31 +134,44 @@ function createStore(db) {
       q(
         'UPDATE wallets SET pin_hash = ?, pin_failures = 0, pin_locked_until = 0 WHERE user_id = ?',
       ).run(pinHash, userId),
-    recordPinFailure(userId, now, maxFailures, lockMs) {
+    // The count only resets on a correct PIN or a new pairing. Past
+    // `freeFailures`, each failure locks for the next of `locksMs`; after the
+    // last one the PIN is deleted, which turns sending off until re-pairing.
+    recordPinFailure(userId, now, freeFailures, locksMs) {
       return tx(() => {
         q(
           'UPDATE wallets SET pin_failures = pin_failures + 1 WHERE user_id = ?',
         ).run(userId);
-        const { pin_failures } = q(
+        const { pin_failures: failures } = q(
           'SELECT pin_failures FROM wallets WHERE user_id = ?',
         ).get(userId);
-        if (pin_failures < maxFailures)
-          return { locked: false, remaining: maxFailures - pin_failures };
-        q(
-          'UPDATE wallets SET pin_failures = 0, pin_locked_until = ? WHERE user_id = ?',
-        ).run(now + lockMs, userId);
-        return { locked: true, remaining: 0 };
+        const step = failures - freeFailures;
+        if (step < 0) return { failures, remaining: -step };
+        if (step >= locksMs.length) {
+          q(
+            'UPDATE wallets SET pin_hash = NULL, pin_locked_until = 0 WHERE user_id = ?',
+          ).run(userId);
+          return { failures, disabled: true };
+        }
+        q('UPDATE wallets SET pin_locked_until = ? WHERE user_id = ?').run(
+          now + locksMs[step],
+          userId,
+        );
+        return { failures, lockMs: locksMs[step] };
       });
     },
     resetPinFailures: userId =>
       q('UPDATE wallets SET pin_failures = 0 WHERE user_id = ?').run(userId),
     walletsNotUnderKey: keyId =>
       q(
-        `SELECT user_id, wallet_pubkey, secret_enc FROM wallets WHERE substr(secret_enc, 1, ?) != ?`,
-      ).all(`v1.${keyId}.`.length, `v1.${keyId}.`),
-    updateSecret: (userId, secretEnc) =>
-      q('UPDATE wallets SET secret_enc = ? WHERE user_id = ?').run(
+        `SELECT user_id, wallet_pubkey, secret_enc, pin_hash FROM wallets
+         WHERE substr(secret_enc, 1, ?) != ?
+            OR (pin_hash IS NOT NULL AND substr(pin_hash, 1, ?) != ?)`,
+      ).all(...Array(2).fill([`v1.${keyId}.`.length, `v1.${keyId}.`]).flat()),
+    updateSecrets: (userId, secretEnc, pinHash) =>
+      q('UPDATE wallets SET secret_enc = ?, pin_hash = ? WHERE user_id = ?').run(
         secretEnc,
+        pinHash,
         userId,
       ),
     deleteUser: userId =>

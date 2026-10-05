@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import { loadConfig } from '../src/config.js';
 import { createKeyring, hashPin, verifyPin } from '../src/crypto.js';
 import { openDb } from '../src/db.js';
+import { isWeakPin } from '../src/bot.js';
 import { rotateKeys } from '../src/index.js';
 import { decodeInvoice, findInvoice, isValidPreimage } from '../src/invoice.js';
 import { createLogger, redact } from '../src/log.js';
@@ -143,6 +144,76 @@ test('crypto: key rotation re-encrypts rows under the new primary key', () => {
       .sort(),
     [7, 8],
   );
+});
+
+test('crypto: rotation encrypts legacy plain PIN hashes and re-keys encrypted ones', async () => {
+  const old = key();
+  const store = openDb(':memory:');
+  const oldRing = createKeyring([old]);
+  const hash = await hashPin('482913');
+  for (const [userId, pk] of [
+    [7, 'ab'],
+    [8, 'cd'],
+  ]) {
+    store.upsertWallet({
+      userId,
+      walletPubkey: pk,
+      relays: [RELAY],
+      secretEnc: oldRing.encrypt('sec', `${userId}:${pk}`),
+      encryption: 'nip44_v2',
+      methods: ['pay_invoice'],
+      now: 1,
+    });
+  }
+  store.setPin(7, hash); // stored by an older version
+  store.setPin(8, oldRing.encrypt(hash, 'pin:8:cd'));
+  const ring = createKeyring([{ id: 'k2', key: randomBytes(32) }, old]);
+  assert.equal(rotateKeys(store, ring, createLogger({ write: () => {} })), 2);
+  for (const [userId, pk] of [
+    [7, 'ab'],
+    [8, 'cd'],
+  ]) {
+    const row = store.getWallet(userId);
+    assert.ok(row.pin_hash.startsWith('v1.k2.'));
+    assert.ok(!row.pin_hash.includes(hash.split('.')[2]), 'hash in clear');
+    assert.equal(ring.decrypt(row.pin_hash, `pin:${userId}:${pk}`), hash);
+  }
+});
+
+test('pin: weak PIN list rejects guessable PINs and allows random ones', () => {
+  for (const pin of [
+    '111111', '123456', '654321', '121212', '123123', '112233', '123321',
+    '147258', '250390', '122590', '900325', '041990',
+  ])
+    assert.equal(isWeakPin(pin), true, pin);
+  for (const pin of ['482913', '135790', '739164'])
+    assert.equal(isWeakPin(pin), false, pin);
+});
+
+test('pin: failures escalate through every lock, then delete the PIN', () => {
+  const store = openDb(':memory:');
+  store.upsertWallet({
+    userId: 7,
+    walletPubkey: 'ab',
+    relays: [RELAY],
+    secretEnc: 'x',
+    encryption: 'nip44_v2',
+    methods: ['pay_invoice'],
+    now: 1,
+  });
+  store.setPin(7, 'h');
+  const locks = [10, 20];
+  const results = Array.from({ length: 5 }, () =>
+    store.recordPinFailure(7, 1000, 2, locks),
+  );
+  assert.deepEqual(results, [
+    { failures: 1, remaining: 1 },
+    { failures: 2, lockMs: 10 },
+    { failures: 3, lockMs: 20 },
+    { failures: 4, disabled: true },
+    { failures: 5, disabled: true },
+  ]);
+  assert.equal(store.getWallet(7).pin_hash, null);
 });
 
 test('crypto: PIN hashing verifies only the right PIN', async () => {
