@@ -100,9 +100,9 @@ back up the encryption key alongside the database.**
 
 **Request money in any chat (inline mode):** type `@YourBot 5000 pizza` in
 any chat and tap the result. The bot creates the invoice in your Blitz wallet
-and posts a request (amount, memo, expiry; the invoice text itself is hidden)
-with three buttons: **⚡ Open wallet** (opens any Lightning wallet via
-`blitzwalletapp.com/pay`), **📋 Copy invoice**, and **Pay with @bot**, which
+and posts a request (sender's name, amount, memo; the invoice text itself is hidden)
+with two buttons: **⚡ Pay request** (opens any Lightning wallet via
+`blitzwalletapp.com/pay`) and **Pay with @bot**, which
 opens the payer's private chat with the bot, where they confirm and enter their
 PIN as for any payment. When it's paid, the
 posted message changes to "✅ paid" and you get a private message. Needs

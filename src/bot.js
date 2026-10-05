@@ -145,6 +145,9 @@ export function classifyPaymentLookup(response, payment, nowMs) {
   return { status: 'unknown' };
 }
 
+// Telegram name shown on posted requests (Telegram User; first_name is required).
+const displayName = from =>
+  escapeHtml([from?.first_name, from?.last_name].filter(Boolean).join(' '));
 const escapeHtml = s =>
   String(s).replace(
     /[&<>"]/g,
@@ -1545,6 +1548,7 @@ export function createBot({
         description: parsed.memo || t('inline.description'),
         input_message_content: {
           message_text: t('inline.creating', {
+            name: displayName(q.from),
             amount: fmtInline,
             memo,
           }),
@@ -1592,41 +1596,36 @@ export function createBot({
       ? t('inline.posted_memo', { memo: escapeHtml(parsed.memo) })
       : '';
     // The invoice itself stays out of the message text: the buttons open it
-    // in a wallet, copy it, or pay it through the bot.
+    // in a wallet or pay it through the bot.
     return editInline(
       t('inline.posted', {
+        name: displayName(r.from),
         amount: satsU(userId)(inv.amountMsat, r.from?.language_code),
         memo,
-        minutes: minutesUntil(inv.expiresAt, now()),
       }),
       invoiceButtons(inv.invoice, id, t),
     );
   }
 
+  // The bot button needs a username to deep-link to, so without one it is
+  // left off.
   function invoiceButtons(invoice, id, t = tFor('en')) {
-    const copy =
-      invoice.length <= MAX_COPY_TEXT
-        ? { text: t('inline.copy_invoice'), copy_text: { text: invoice } }
-        : { text: t('inline.copy_invoice'), url: `${PAY_PAGE_URL}#${invoice}` };
-    return {
-      inline_keyboard: [
-        [
-          {
-            text: t('inline.open_wallet'),
-            url: `${PAY_PAGE_URL}#open:${invoice}`,
-          },
-          copy,
-        ],
-        [
-          {
-            text: config.botUsername
-              ? t('inline.pay_with', { bot: config.botUsername })
-              : t('inline.pay_generic'),
-            callback_data: `ip:${id}`,
-          },
-        ],
+    const rows = [
+      [
+        {
+          text: t('inline.pay_request'),
+          url: `${PAY_PAGE_URL}#open:${invoice}`,
+        },
       ],
-    };
+    ];
+    if (config.botUsername)
+      rows.push([
+        {
+          text: t('inline.pay_with', { bot: config.botUsername }),
+          callback_data: `ip:${id}`,
+        },
+      ]);
+    return { inline_keyboard: rows };
   }
 
   // "Pay" on a posted invoice. Paying needs Confirm + PIN, which must never

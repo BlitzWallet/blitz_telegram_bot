@@ -589,13 +589,11 @@ invoice is reconciled immediately and the posted message is edited to "paid"
 used to pay pasted invoices: Telegram caps queries at 256 characters, shorter
 than most BOLT11 invoices.
 
-**Posted request layout.** The posted message shows amount, memo and expiry
-only; the BOLT11 text lives in the buttons. Telegram buttons can only open
-`http(s)`/`tg` links and `copy_text` holds at most 256 characters (Blitz
-invoices are ~500), so "⚡ Open wallet" links to
-`https://blitzwalletapp.com/pay#open:<invoice>` and long-invoice "Copy" to
-`…/pay#<invoice>`. That page (blitz-wallet-website `pages/pay/`) reads the
+**Posted request layout.** The posted message shows the sender's Telegram name,
+amount and memo only; the BOLT11 text lives in the buttons: "⚡ Pay request" and, when the
+bot knows its username, "Pay with @bot". Telegram buttons can only open
+`http(s)`/`tg` links, so "⚡ Pay request" links to
+`https://blitzwalletapp.com/pay#open:<invoice>`. That page (blitz-wallet-website `pages/pay/`) reads the
 invoice from the URL fragment, which browsers never send to the server,
 validates it as bech32 BOLT11, then hands it to `lightning:` / the clipboard and
-shows a QR for desktop users. It has no analytics. Short invoices use the
-native copy button. The inline result thumbnail is the website's 512 px icon.
+shows a QR for desktop users. It has no analytics. The inline result thumbnail is the website's 512 px icon.

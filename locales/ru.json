@@ -177,16 +177,15 @@
     "hint": "Введите сумму, например 5000 пицца",
     "title": "Попросить {{amount}} сат",
     "description": "Попросить деньги из вашего Blitz",
-    "creating": "⚡ Прошу <b>{{amount}} сат</b>{{memo}}…",
+    "creating": "Запрос от {{name}} на <b>{{amount}} сат</b>{{memo}}…",
     "creating_button": "⏳ Работаю над этим…",
     "amount_fail": "Я не могу попросить такую сумму.",
     "create_fail": "Я не смог сделать запрос.",
-    "posted": "⚡ Прошу <b>{{amount}} сат</b>{{memo}}\nИстекает через {{minutes}} мин.",
+    "posted": "Запрос от {{name}} на <b>{{amount}} сат</b>{{memo}}",
     "posted_memo": " — {{memo}}",
-    "open_wallet": "⚡ Открыть кошелёк",
+    "pay_request": "⚡ Оплатить запрос",
     "copy_invoice": "📋 Скопировать запрос на оплату",
-    "pay_with": "Заплатить через @{{bot}}",
-    "pay_generic": "Заплатить здесь"
+    "pay_with": "Заплатить через @{{bot}}"
   },
   "chatpay": {
     "own": "Это ваш собственный запрос.",

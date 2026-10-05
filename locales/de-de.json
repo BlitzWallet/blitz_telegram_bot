@@ -177,16 +177,15 @@
     "hint": "Tippe einen Betrag, z. B. 5000 Pizza",
     "title": "Bitte um {{amount}} Sats",
     "description": "Bitte um Geld aus deiner Blitz",
-    "creating": "⚡ Bitte um <b>{{amount}} Sats</b>{{memo}}…",
+    "creating": "{{name}} sendet eine Anfrage über <b>{{amount}} Sats</b>{{memo}}…",
     "creating_button": "⏳ Arbeite daran…",
     "amount_fail": "Um diesen Betrag kann ich nicht bitten.",
     "create_fail": "Ich konnte die Anfrage nicht erstellen.",
-    "posted": "⚡ Bitte um <b>{{amount}} Sats</b>{{memo}}\nLäuft in {{minutes}} Min. ab.",
+    "posted": "{{name}} hat eine Anfrage über <b>{{amount}} Sats</b> gesendet{{memo}}",
     "posted_memo": " — {{memo}}",
-    "open_wallet": "⚡ Wallet öffnen",
+    "pay_request": "⚡ Anfrage bezahlen",
     "copy_invoice": "📋 Zahlungsanfrage kopieren",
-    "pay_with": "Mit @{{bot}} zahlen",
-    "pay_generic": "Hier zahlen"
+    "pay_with": "Mit @{{bot}} zahlen"
   },
   "chatpay": {
     "own": "Das ist deine eigene Anfrage.",

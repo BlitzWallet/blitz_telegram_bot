@@ -177,16 +177,15 @@
     "hint": "Skriv ett belopp, som 5000 pizza",
     "title": "Be om {{amount}} sats",
     "description": "Be om pengar från din Blitz",
-    "creating": "⚡ Ber om <b>{{amount}} sats</b>{{memo}}…",
+    "creating": "{{name}} skickar en begäran på <b>{{amount}} sats</b>{{memo}}…",
     "creating_button": "⏳ Jobbar på det…",
     "amount_fail": "Jag kan inte be om det beloppet.",
     "create_fail": "Jag kunde inte göra förfrågan.",
-    "posted": "⚡ Ber om <b>{{amount}} sats</b>{{memo}}\nGår ut om {{minutes}} min.",
+    "posted": "{{name}} skickade en begäran på <b>{{amount}} sats</b>{{memo}}",
     "posted_memo": " — {{memo}}",
-    "open_wallet": "⚡ Öppna wallet",
+    "pay_request": "⚡ Betala begäran",
     "copy_invoice": "📋 Kopiera betalningsförfrågan",
-    "pay_with": "Betala med @{{bot}}",
-    "pay_generic": "Betala här"
+    "pay_with": "Betala med @{{bot}}"
   },
   "chatpay": {
     "own": "Det är din egen förfrågan.",

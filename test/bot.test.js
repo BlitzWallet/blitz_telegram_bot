@@ -1191,14 +1191,19 @@ test('language: stored locale persists and unknown codes fall back to English', 
 const inlineQuery = (h, userId, query) =>
   h.bot.handleUpdate({
     update_id: 5000,
-    inline_query: { id: `q${query}`, from: { id: userId }, query, offset: '' },
+    inline_query: {
+      id: `q${query}`,
+      from: { id: userId, first_name: 'Ann', last_name: '<Lee>' },
+      query,
+      offset: '',
+    },
   });
 const chooseInline = (h, userId, query, inlineMessageId = 'imid-1') =>
   h.bot.handleUpdate({
     update_id: 5001,
     chosen_inline_result: {
       result_id: 'invoice',
-      from: { id: userId },
+      from: { id: userId, first_name: 'Ann', last_name: '<Lee>' },
       query,
       inline_message_id: inlineMessageId,
     },
@@ -1241,7 +1246,7 @@ test('inline: typing previews without touching the wallet', async () => {
   assert.equal(result.title, 'Ask for 5,000 sats');
   assert.match(
     result.input_message_content.message_text,
-    /Asking for <b>5,000 sats<\/b> — pizza &lt;b&gt;/,
+    /^Ann &lt;Lee&gt; is sending a request for <b>5,000 sats<\/b> — pizza &lt;b&gt;/,
   );
   assert.ok(
     result.reply_markup.inline_keyboard[0][0],
@@ -1280,20 +1285,15 @@ test('inline: choosing the result creates one invoice, edits the message, notifi
   assert.equal(edit.inline_message_id, 'imid-1');
   assert.equal(
     edit.text,
-    '⚡ Asking for <b>5,000 sats</b> — pizza\nExpires in 60 min.',
+    'Ann &lt;Lee&gt; sent a request for <b>5,000 sats</b> — pizza',
   );
   assert.ok(!edit.text.includes('lnbc'), 'invoice is not shown in the chat');
-  const [[open, copy], [pay]] = edit.reply_markup.inline_keyboard;
+  const [[open], [pay], ...rest] = edit.reply_markup.inline_keyboard;
+  assert.equal(rest.length, 0, 'only Pay request and Pay with the bot');
   const invoice = open.url.split('#open:')[1];
   assert.match(invoice, /^lnbc50000n1/);
   assert.equal(open.url, `https://blitzwalletapp.com/pay#open:${invoice}`);
-  assert.equal(open.text, '⚡ Open wallet');
-  // Short enough: Telegram's native copy button; longer: the pay page.
-  assert.ok(invoice.length <= 256);
-  assert.deepEqual(copy, {
-    text: '📋 Copy payment request',
-    copy_text: { text: invoice },
-  });
+  assert.equal(open.text, '⚡ Pay request');
   assert.equal(pay.text, 'Pay with @BlitzTestBot');
   assert.match(pay.callback_data, /^ip:/);
   assert.equal(h.store.recentInvoices(ALICE)[0].status, 'open');
@@ -1310,7 +1310,7 @@ test('inline: choosing the result creates one invoice, edits the message, notifi
   assert.match(lastInlineEdit(h).text, /✅ <b>5,000 sats<\/b> paid/);
 });
 
-test('inline: long invoices copy through the pay page; results show the Blitz icon', async () => {
+test('inline: long invoices still open through the pay page; results show the Blitz icon', async () => {
   const h = createHarness();
   h.wallet.handlers.make_invoice = ({ amount }) => ({
     result: {
@@ -1329,13 +1329,22 @@ test('inline: long invoices copy through the pay page; results show the Blitz ic
     'https://blitzwalletapp.com/public/favicon/web-app-manifest-512x512.png',
   );
   await chooseInline(h, ALICE, '5000');
-  const [[open, copy]] = lastInlineEdit(h).reply_markup.inline_keyboard;
+  const [[open]] = lastInlineEdit(h).reply_markup.inline_keyboard;
   const invoice = open.url.split('#open:')[1];
   assert.ok(invoice.length > 256);
-  assert.deepEqual(copy, {
-    text: '📋 Copy payment request',
-    url: `https://blitzwalletapp.com/pay#${invoice}`,
+  assert.match(invoice, /^lnbc/);
+});
+
+test('inline: without a bot username there is no Pay with the bot button', async () => {
+  const h = createHarness({
+    wallet: invoicingWallet(),
+    config: { botUsername: null },
   });
+  await h.connect(ALICE);
+  await chooseInline(h, ALICE, '5000');
+  const rows = lastInlineEdit(h).reply_markup.inline_keyboard;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0][0].text, '⚡ Pay request');
 });
 
 test('inline: failures stay private and other chats see only a short notice', async () => {

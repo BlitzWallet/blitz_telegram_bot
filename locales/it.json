@@ -177,16 +177,15 @@
     "hint": "Scrivi un importo, come 5000 pizza",
     "title": "Chiedi {{amount}} sat",
     "description": "Chiedi soldi dalla tua Blitz",
-    "creating": "⚡ Chiedo <b>{{amount}} sat</b>{{memo}}…",
+    "creating": "{{name}} sta inviando una richiesta di <b>{{amount}} sat</b>{{memo}}…",
     "creating_button": "⏳ Ci sto lavorando…",
     "amount_fail": "Non posso chiedere quell'importo.",
     "create_fail": "Non ho potuto fare la richiesta.",
-    "posted": "⚡ Chiedo <b>{{amount}} sat</b>{{memo}}\nScade tra {{minutes}} min.",
+    "posted": "{{name}} ha inviato una richiesta di <b>{{amount}} sat</b>{{memo}}",
     "posted_memo": " — {{memo}}",
-    "open_wallet": "⚡ Apri wallet",
+    "pay_request": "⚡ Paga richiesta",
     "copy_invoice": "📋 Copia richiesta di pagamento",
-    "pay_with": "Paga con @{{bot}}",
-    "pay_generic": "Paga qui"
+    "pay_with": "Paga con @{{bot}}"
   },
   "chatpay": {
     "own": "Questa è la tua richiesta.",

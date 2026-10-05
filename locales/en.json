@@ -177,16 +177,15 @@
     "hint": "Type an amount, like 5000 pizza",
     "title": "Ask for {{amount}} sats",
     "description": "Ask for money from your Blitz",
-    "creating": "⚡ Asking for <b>{{amount}} sats</b>{{memo}}…",
+    "creating": "{{name}} is sending a request for <b>{{amount}} sats</b>…",
     "creating_button": "⏳ Working on it…",
     "amount_fail": "I can't ask for that amount.",
     "create_fail": "I couldn't make the request.",
-    "posted": "⚡ Asking for <b>{{amount}} sats</b>{{memo}}\nExpires in {{minutes}} min.",
+    "posted": "{{name}} sent a request for <b>{{amount}} sats</b>",
     "posted_memo": " — {{memo}}",
-    "open_wallet": "⚡ Open wallet",
+    "pay_request": "⚡ Pay request",
     "copy_invoice": "📋 Copy payment request",
-    "pay_with": "Pay with @{{bot}}",
-    "pay_generic": "Pay here"
+    "pay_with": "Pay with @{{bot}}"
   },
   "chatpay": {
     "own": "This is your own request.",
