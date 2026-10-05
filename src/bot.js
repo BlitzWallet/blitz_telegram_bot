@@ -3,6 +3,13 @@ import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { bytesToHex } from 'nostr-tools/utils';
 import { hashPin, randomId, verifyPin } from './crypto.js';
 import {
+  LANGUAGE_NAMES,
+  SUPPORTED_LOCALES,
+  normalizeLocale,
+  t,
+  tFor,
+} from './i18n.js';
+import {
   decodeInvoice,
   findInvoice,
   InvoiceError,
@@ -130,7 +137,13 @@ const escapeHtml = s =>
     /[&<>"]/g,
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c],
   );
-const sats = msat => Math.floor(msat / 1000).toLocaleString('en-US');
+const sats = (msat, locale = 'en-US') => {
+  try {
+    return Math.floor(msat / 1000).toLocaleString(locale);
+  } catch {
+    return Math.floor(msat / 1000).toLocaleString('en-US');
+  }
+};
 const fmtDate = sec =>
   new Date(sec * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 const minutesUntil = (ms, now) => Math.max(0, Math.round((ms - now) / MIN));
@@ -144,32 +157,9 @@ function bucket(capacity, perMinute) {
 }
 const RATE = { update: bucket(40, 30), wallet: bucket(4, 8) };
 
-const HELP = `<b>Blitz Wallet for Telegram</b>
-This bot is a remote control for the <b>Wallet Connect account</b> in your Blitz Wallet. Your money stays in Blitz; the bot never holds your funds or recovery phrase.
-
-/balance – Wallet Connect balance
-/receive <i>amount</i> [memo] – create an invoice, e.g. <code>/receive 21000 coffee</code>
-/send – pay an invoice (or just paste one)
-/transactions – recent activity
-/status – payments and invoices the bot is tracking
-/connect – connect or replace your wallet
-/disconnect – remove your wallet from this bot
-
-<b>Request money in any chat:</b> type my @username followed by an amount, e.g. <code>5000 pizza</code>, and tap the result. Only the invoice is posted; your balance stays private.
-
-<b>Stay safe</b>
-• Blitz will never ask you for your connection string or PIN in a chat.
-• Only pay invoices you expected. The memo is written by whoever made the invoice.
-• To revoke access instantly, delete the connection in Blitz → Settings → Wallet Connect.`;
-
-const PASTE_HOWTO = `<b>Connect manually (older Blitz versions)</b>
-1. In Blitz, open <b>Settings → Wallet Connect → Add connection</b>.
-2. Name it <b>Telegram</b> (use it only for this bot).
-3. Permissions: Receive payments, Get Balance, Transactions, Lookup Invoice. Add <b>Send payments</b> only if you want to pay from Telegram.
-4. Set a <b>budget</b> (e.g. a daily limit). Blitz enforces it, even if this bot were compromised.
-5. Copy the connection string and paste it here.
-
-I delete the message as soon as I receive it. Telegram may still keep a copy on its servers, which is another reason to use a dedicated connection with a budget.`;
+// Per-user text: HELP/PASTE_HOWTO depend on the user's language.
+const helpFor = lng => tFor(lng)('help');
+const pasteHowtoFor = lng => tFor(lng)('paste_howto');
 
 export function createBot({
   tg,
@@ -232,6 +222,82 @@ export function createBot({
     return true;
   }
 
+  // --- language ------------------------------------------------------------
+  // Stored per user via /connect or /language; falls back to Telegram's
+  // language_code on first contact, then 'en'. All user-facing text goes
+  // through tu(userId) so each user sees their own language.
+  const localeOf = (userId, tgLang) => {
+    try {
+      const saved = store.getLocale?.(userId);
+      if (saved) return normalizeLocale(saved);
+    } catch {}
+    if (tgLang) return normalizeLocale(tgLang);
+    return 'en';
+  };
+  const tu = (userId, tgLang) => tFor(localeOf(userId, tgLang));
+  const satsU = userId => (msat, tgLang) =>
+    sats(msat, localeOf(userId, tgLang));
+
+  const languageRows = (current, action = 'lg') => {
+    const rows = [];
+    for (let i = 0; i < SUPPORTED_LOCALES.length; i += 2) {
+      rows.push(
+        SUPPORTED_LOCALES.slice(i, i + 2).map(code => ({
+          text: `${code === current ? '✅ ' : ''}${LANGUAGE_NAMES[code] ?? code}`,
+          callback_data: `${action}:${code}`,
+        })),
+      );
+    }
+    return rows;
+  };
+
+  async function askLanguage(userId, mode = 'connect', tgLang) {
+    const t = tu(userId, tgLang);
+    if (mode === 'connect' && store.inFlightPaymentCount(userId) > 0) {
+      return send(userId, t('common.inflight_block_connect'));
+    }
+    const current = localeOf(userId, tgLang);
+    const action = mode === 'connect' ? 'lg' : 'll';
+    return send(userId, t('language.prompt'), {
+      reply_markup: { inline_keyboard: languageRows(current, action) },
+    });
+  }
+
+  async function setLanguageAndContinue(
+    userId,
+    messageId,
+    code,
+    { thenPair = false } = {},
+  ) {
+    const normalized = normalizeLocale(code);
+    if (!SUPPORTED_LOCALES.includes(normalized)) return;
+    try {
+      store.setLocale?.(userId, normalized, now());
+    } catch (err) {
+      log.warn('setLocale failed', { err });
+    }
+    const t = tu(userId);
+    log.info('language set', { user: log.user(userId), locale: normalized });
+    if (thenPair) {
+      await edit(
+        userId,
+        messageId,
+        t('language.updated', {
+          language: LANGUAGE_NAMES[normalized] ?? normalized,
+        }),
+      );
+      return startPairing(userId);
+    }
+    return edit(
+      userId,
+      messageId,
+      t('language.updated', {
+        language: LANGUAGE_NAMES[normalized] ?? normalized,
+      }),
+      { reply_markup: { inline_keyboard: languageRows(normalized, 'll') } },
+    );
+  }
+
   const aad = (userId, walletPubkey) => `${userId}:${walletPubkey}`;
   const methodsOf = wallet => new Set(wallet.methods.split(' '));
   const connFor = wallet => ({
@@ -262,14 +328,14 @@ export function createBot({
     }
   }
 
-  const walletTrouble = r =>
+  const walletTrouble = (r, t = tFor('en')) =>
     r.busy
-      ? 'The bot is busy right now. Please try again in a minute.'
+      ? t('wallet.trouble_busy')
       : r.timeout
-        ? 'Your wallet didn’t respond. Make sure Blitz has notifications enabled and the Telegram connection still exists in Settings → Wallet Connect.'
+        ? t('wallet.trouble_timeout')
         : ['UNAUTHORIZED', 'RESTRICTED'].includes(r.error?.code)
-          ? 'Your wallet refused this request. The connection may have been removed or lacks this permission. Use /connect to set it up again.'
-          : 'Your wallet couldn’t complete that request. Please try again later.';
+          ? t('wallet.trouble_refused')
+          : t('wallet.trouble_default');
 
   // ------------------------------------------------------------------ updates
 
@@ -286,13 +352,13 @@ export function createBot({
   }
 
   function handleUpdate(update) {
-    const userId = (
+    const from =
       update.message ??
       update.edited_message ??
       update.callback_query ??
       update.inline_query ??
-      update.chosen_inline_result
-    )?.from?.id;
+      update.chosen_inline_result;
+    const userId = from?.from?.id;
     if (!Number.isSafeInteger(userId)) return Promise.resolve();
     return runForUser(userId, async () => {
       try {
@@ -306,10 +372,7 @@ export function createBot({
         )?.chat;
         // Never echo the error itself; it may contain request details.
         if (chat?.type === 'private')
-          await send(
-            userId,
-            'Something went wrong on my side. Please try again.',
-          );
+          await send(userId, tu(userId, from?.from?.language_code)('common.generic_error'));
       }
     });
   }
@@ -323,6 +386,7 @@ export function createBot({
     const msg = update.message ?? update.edited_message;
     if (!msg?.from || msg.from.is_bot) return;
     const userId = msg.from.id;
+    const t = tu(userId, msg.from.language_code);
     const text = String(msg.text ?? msg.caption ?? '').slice(0, 4096);
 
     // Before anything else: get connection strings out of the chat, wherever
@@ -338,18 +402,15 @@ export function createBot({
 
     if (msg.chat.type !== 'private') {
       if (hasSecret) {
-        await send(
-          msg.chat.id,
-          '⚠️ A wallet connection string was posted here. I deleted the message, but treat it as exposed: delete that connection in Blitz → Settings → Wallet Connect.',
-        );
+        await send(msg.chat.id, t('common.group_secret_warning'));
       }
       await safe(tg.call('leaveChat', { chat_id: msg.chat.id }));
       return;
     }
     if (!allow(userId, 'update'))
-      return send(userId, 'Slow down a little and try again in a minute.');
+      return send(userId, t('common.slow_down'));
     if (config.allowedUsers && !config.allowedUsers.has(userId)) {
-      return send(userId, 'This bot is private.');
+      return send(userId, t('common.private'));
     }
     // Edits and non-text messages are only screened for secrets, never executed.
     if (update.edited_message || typeof msg.text !== 'string') {
@@ -361,25 +422,31 @@ export function createBot({
     const [, command, args = ''] =
       text.match(/^\/([a-z_]+)(?:@\w+)?\s*([\s\S]*)$/i) ?? [];
     switch (command?.toLowerCase()) {
-      case 'start':
+      case 'start': {
         // Deep link from inline mode's "Connect your Blitz Wallet first".
-        if (args.trim() === 'connect') return startPairing(userId);
+        if (args.trim() === 'connect') return askLanguage(userId, 'connect', msg.from.language_code);
         // From the "Pay" button on an invoice someone posted in a chat.
         if (/^pay_[A-Za-z0-9_-]{1,32}$/.test(args.trim())) {
           return payPosted(userId, args.trim().slice(4));
         }
+        const help = helpFor(localeOf(userId, msg.from.language_code));
         return send(
           userId,
           store.getWallet(userId)
-            ? HELP
-            : `${HELP}\n\nTo get started, use /connect.`,
+            ? help
+            : t('start.get_started', { help }),
         );
-      case 'help':
-        return send(userId, HELP);
+      }
+      case 'help': {
+        const help = helpFor(localeOf(userId, msg.from.language_code));
+        return send(userId, help);
+      }
       case 'connect':
-        return startPairing(userId);
+        return askLanguage(userId, 'connect', msg.from.language_code);
+      case 'language':
+        return askLanguage(userId, 'manage', msg.from.language_code);
       case 'connect_manual':
-        return send(userId, PASTE_HOWTO);
+        return send(userId, pasteHowtoFor(localeOf(userId, msg.from.language_code)));
       case 'balance':
         return balance(userId);
       case 'receive':
@@ -387,7 +454,7 @@ export function createBot({
       case 'send':
         return args.trim()
           ? startSend(userId, args)
-          : send(userId, 'Paste the Lightning invoice you want to pay.');
+          : send(userId, t('send.paste_prompt'));
       case 'transactions':
         return transactions(userId, 0);
       case 'status':
@@ -396,14 +463,12 @@ export function createBot({
         return askDisconnect(userId);
     }
     if (findInvoice(text)) return startSend(userId, text);
-    return send(
-      userId,
-      'I didn’t understand that. Send /help to see what I can do.',
-    );
+    return send(userId, t('common.unknown_command'));
   }
 
   async function onCallback(cq) {
     const userId = cq.from.id;
+    const t = tu(userId, cq.from.language_code);
     const answer = text =>
       safe(
         tg.call('answerCallbackQuery', {
@@ -418,11 +483,19 @@ export function createBot({
       cq.data ?? '',
     );
     if (m?.[1] === 'ip') return payPostedInvoice(cq, m[2], answer);
+    if (m?.[1] === 'lg')
+      return setLanguageAndContinue(userId, msg?.message_id, m[2], {
+        thenPair: true,
+      });
+    if (m?.[1] === 'll')
+      return setLanguageAndContinue(userId, msg?.message_id, m[2], {
+        thenPair: false,
+      });
     if (!m || msg?.chat?.type !== 'private' || msg.chat.id !== userId)
       return answer();
     if (config.allowedUsers && !config.allowedUsers.has(userId))
       return answer();
-    if (!allow(userId, 'update')) return answer('Slow down a little.');
+    if (!allow(userId, 'update')) return answer(t('common.slow_down_short'));
     const [, action, id, key] = m;
     await answer();
     switch (action) {
@@ -432,11 +505,7 @@ export function createBot({
         return confirmPayment(userId, msg.message_id, id);
       case 'px':
         if (store.cancelPayment(id, userId, now())) pinSessions.delete(userId);
-        return edit(
-          userId,
-          msg.message_id,
-          'Payment cancelled. Nothing was sent.',
-        );
+        return edit(userId, msg.message_id, t('pin.cancel_payment'));
       case 'ic':
         return checkInvoice(userId, id);
       case 'tx':
@@ -446,15 +515,16 @@ export function createBot({
       case 'dc':
         return id === 'yes'
           ? disconnect(userId, msg.message_id)
-          : edit(userId, msg.message_id, 'Still connected.');
+          : edit(userId, msg.message_id, t('disconnect.kept'));
     }
   }
 
   // ---------------------------------------------------------------- connect
 
   async function connect(userId, text) {
+    const t = tu(userId);
     if (!allow(userId, 'wallet'))
-      return send(userId, 'Slow down a little and try again in a minute.');
+      return send(userId, t('common.slow_down'));
     let parsed;
     try {
       parsed = parseConnectionString(text, config.allowedRelays);
@@ -463,52 +533,40 @@ export function createBot({
       return send(
         userId,
         err.reason === 'relay'
-          ? 'That connection uses a relay this bot doesn’t support. Please create the connection in Blitz Wallet.'
-          : 'That doesn’t look like a valid Blitz Wallet connection string. Copy it again from Blitz → Settings → Wallet Connect.',
+          ? t('connect.relay_unsupported')
+          : t('connect.invalid_string'),
       );
     }
     if (store.inFlightPaymentCount(userId) > 0) {
-      return send(
-        userId,
-        'A payment is still being confirmed. Please wait until it resolves (see /status) before changing your connection.',
-      );
+      return send(userId, t('common.inflight_block_connect'));
     }
 
-    await send(
-      userId,
-      'Checking your wallet… (this can take a few seconds while Blitz wakes up)',
-    );
+    await send(userId, t('connect.checking'));
     let conn;
     try {
       conn = { ...parsed, encryption: await nwc.negotiateEncryption(parsed) };
     } catch {
-      return send(
-        userId,
-        'I couldn’t reach the wallet relay. Please try again in a minute.',
-      );
+      return send(userId, t('connect.relay_unreachable'));
     }
     const res = await walletCall(conn, 'get_info', {});
     if (!res.result)
-      return send(userId, `Not connected. ${walletTrouble(res)}`);
+      return send(userId, t('common.not_connected', { reason: walletTrouble(res, t) }));
     return saveConnection(userId, conn, res.result.methods);
   }
 
   // Shared by both flows. `conn.secret` is the NWC client secret; it is only
   // ever written encrypted.
   async function saveConnection(userId, conn, methods) {
+    const t = tu(userId);
     const granted = Array.isArray(methods)
       ? methods.filter(m => BOT_METHODS.includes(m))
       : [];
-    if (!granted.length)
-      return send(
-        userId,
-        'This connection doesn’t allow anything the bot can do. Enable at least Get Balance or Receive payments in Blitz and try again.',
-      );
+    if (!granted.length) return send(userId, t('connect.no_methods'));
 
-    const t = now();
+    const nowMs = now();
     const replaced = store.getWallet(userId);
     // Confirmations and keypads belong to the old connection.
-    store.cancelAwaiting(userId, t);
+    store.cancelAwaiting(userId, nowMs);
     pinSessions.delete(userId);
     store.upsertWallet({
       userId,
@@ -517,9 +575,9 @@ export function createBot({
       secretEnc: keyring.encrypt(conn.secret, aad(userId, conn.walletPubkey)),
       encryption: conn.encryption,
       methods: granted,
-      now: t,
+      now: nowMs,
     });
-    if (replaced) store.closeOpenInvoices(userId, t);
+    if (replaced) store.closeOpenInvoices(userId, nowMs);
     log.info('wallet connected', {
       user: log.user(userId),
       methods: granted.join(' '),
@@ -527,27 +585,27 @@ export function createBot({
     });
 
     const can = new Set(granted);
+    const yes = '✅';
+    const no = '—';
     const lines = [
-      '✅ <b>Wallet connected.</b>',
-      `${can.has('get_balance') ? '✅' : '—'} Balance   ${can.has('make_invoice') ? '✅' : '—'} Receive   ${can.has('list_transactions') ? '✅' : '—'} Transactions   ${can.has('pay_invoice') && can.has('lookup_invoice') ? '✅' : '—'} Send`,
+      t('connect.connected_title'),
+      t('connect.capabilities', {
+        balance: can.has('get_balance') ? yes : no,
+        receive: can.has('make_invoice') ? yes : no,
+        transactions: can.has('list_transactions') ? yes : no,
+        send:
+          can.has('pay_invoice') && can.has('lookup_invoice') ? yes : no,
+      }),
     ];
     if (can.has('pay_invoice') && !can.has('lookup_invoice')) {
-      lines.push(
-        'Sending is off: also enable <b>Lookup Invoice</b> so I can confirm whether a payment went through.',
-      );
+      lines.push(t('connect.sending_off'));
     }
     if (replaced && replaced.wallet_pubkey !== conn.walletPubkey) {
-      lines.push(
-        'Your previous connection was replaced. Delete it in Blitz → Settings → Wallet Connect so it can’t be used anymore.',
-      );
+      lines.push(t('connect.replaced'));
     }
     await send(userId, lines.join('\n'));
     if (can.has('pay_invoice') && can.has('lookup_invoice')) {
-      return startPinSession(
-        userId,
-        { purpose: 'set' },
-        'Choose a 6-digit <b>payment PIN</b>. You’ll enter it on this keypad for every payment; it never appears in the chat.',
-      );
+      return startPinSession(userId, { purpose: 'set' }, t('connect.choose_pin'));
     }
   }
 
@@ -557,18 +615,13 @@ export function createBot({
   // public half in a link. Nothing secret is pasted, shown or sent through
   // Telegram, and the secret is kept in memory until Blitz approves.
   async function startPairing(userId) {
+    const t = tu(userId);
     if (store.inFlightPaymentCount(userId) > 0) {
-      return send(
-        userId,
-        'A payment is still being confirmed. Please wait until it resolves (see /status) before changing your connection.',
-      );
+      return send(userId, t('common.inflight_block_connect'));
     }
     pairings.get(userId)?.abort(); // a new link replaces the previous one
     if (pairings.size >= LIMITS.maxPendingPairings) {
-      return send(
-        userId,
-        'The bot is busy right now. Please try again in a minute.',
-      );
+      return send(userId, t('common.busy'));
     }
 
     const sk = generateSecretKey();
@@ -599,25 +652,27 @@ export function createBot({
 
     const abort = new AbortController();
     pairings.set(userId, abort);
-    const budget = config.connectBudgetSats
-      ? ` and, if you allow sending, a limit of ${config.connectBudgetSats.toLocaleString('en-US')} sats per day`
-      : '';
+    const body = config.connectBudgetSats
+      ? t('pairing.body_with_budget', {
+          budget: config.connectBudgetSats.toLocaleString('en-US'),
+        })
+      : t('pairing.body_no_budget');
     await send(
       userId,
       [
-        '<b>Connect your Blitz Wallet</b>',
-        `Tap the button on the phone where Blitz is installed and approve the request. The bot gets access to your Wallet Connect account (a separate balance)${budget}. You can change or remove it any time in Blitz → Settings → Wallet Connect.`,
+        t('pairing.title'),
+        body,
         '',
-        'Nothing secret is shared: there is no connection string to copy.',
+        t('pairing.no_secret'),
         '',
-        `This link works for ${LIMITS.pairingTimeoutMs / MIN} minutes. Blitz on another device? Scan or paste this in Blitz:`,
+        t('pairing.link_info', { minutes: LIMITS.pairingTimeoutMs / MIN }),
         `<code>${uri}</code>`,
         '',
-        'Older Blitz version? Use /connect_manual.',
+        t('pairing.manual_hint'),
       ].join('\n'),
       {
         reply_markup: {
-          inline_keyboard: [[{ text: 'Connect in Blitz', url: link }]],
+          inline_keyboard: [[{ text: t('pairing.button'), url: link }]],
         },
       },
     );
@@ -632,11 +687,9 @@ export function createBot({
       .then(info =>
         runForUser(userId, async () => {
           if (pairings.get(userId) !== abort) return; // superseded meanwhile
+          const tt = tu(userId);
           if (store.inFlightPaymentCount(userId) > 0) {
-            return send(
-              userId,
-              'Blitz approved the connection, but a payment is still being confirmed, so I didn’t switch. Delete the new connection in Blitz → Settings → Wallet Connect and try /connect again later.',
-            );
+            return send(userId, tt('pairing.approved_but_inflight'));
           }
           await saveConnection(
             userId,
@@ -652,17 +705,12 @@ export function createBot({
       )
       .catch(err => {
         if (abort.signal.aborted) return; // replaced by a newer link
+        const tt = tu(userId);
         if (err instanceof ConnectionStringError) {
-          return send(
-            userId,
-            'Your wallet asked to use a relay this bot doesn’t support, so I didn’t connect. Delete the new connection in Blitz → Settings → Wallet Connect.',
-          );
+          return send(userId, tt('pairing.relay_unsupported'));
         }
         if (err instanceof NwcTimeoutError) {
-          return send(
-            userId,
-            'The connection link expired. Send /connect for a new one.',
-          );
+          return send(userId, tt('pairing.expired'));
         }
         log.error('pairing failed', { err, user: log.user(userId) });
       })
@@ -671,7 +719,7 @@ export function createBot({
 
   // --------------------------------------------------------------- PIN pad
 
-  const keypadMarkup = nonce => ({
+  const keypadMarkup = (nonce, t = tFor('en')) => ({
     inline_keyboard: [
       ['1', '2', '3'],
       ['4', '5', '6'],
@@ -679,7 +727,7 @@ export function createBot({
       ['b', '0', 'x'],
     ].map(row =>
       row.map(k => ({
-        text: k === 'b' ? '⌫' : k === 'x' ? '✖ Cancel' : k,
+        text: k === 'b' ? '⌫' : k === 'x' ? t('pin.cancel_button') : k,
         callback_data: `k:${nonce}:${k}`,
       })),
     ),
@@ -687,6 +735,7 @@ export function createBot({
   const dots = n => '●'.repeat(n) + '○'.repeat(LIMITS.pinLength - n);
 
   async function startPinSession(userId, session, prompt, messageId) {
+    const t = tu(userId);
     const s = {
       ...session,
       nonce: randomBytes(9).toString('base64url'),
@@ -699,16 +748,17 @@ export function createBot({
     if (messageId) {
       s.messageId = messageId;
       return edit(userId, messageId, text, {
-        reply_markup: keypadMarkup(s.nonce),
+        reply_markup: keypadMarkup(s.nonce, t),
       });
     }
     const sent = await send(userId, text, {
-      reply_markup: keypadMarkup(s.nonce),
+      reply_markup: keypadMarkup(s.nonce, t),
     });
     s.messageId = sent?.message_id;
   }
 
   async function keypad(userId, messageId, nonce, key) {
+    const t = tu(userId);
     const s = pinSessions.get(userId);
     if (
       !s ||
@@ -716,7 +766,7 @@ export function createBot({
       s.expiresAt < now() ||
       s.messageId !== messageId
     ) {
-      return edit(userId, messageId, 'This keypad has expired.');
+      return edit(userId, messageId, t('pin.expired'));
     }
     if (key === 'x') {
       pinSessions.delete(userId);
@@ -724,9 +774,7 @@ export function createBot({
       return edit(
         userId,
         messageId,
-        s.purpose === 'pay'
-          ? 'Payment cancelled. Nothing was sent.'
-          : 'PIN setup cancelled. You’ll be asked to set a PIN before your first payment.',
+        s.purpose === 'pay' ? t('pin.cancel_payment') : t('pin.cancel_setup'),
       );
     }
     if (key === 'b') s.digits = s.digits.slice(0, -1);
@@ -736,7 +784,7 @@ export function createBot({
         userId,
         messageId,
         `${s.prompt}\n\n<code>${dots(s.digits.length)}</code>`,
-        { reply_markup: keypadMarkup(s.nonce) },
+        { reply_markup: keypadMarkup(s.nonce, t) },
       );
     }
 
@@ -744,22 +792,21 @@ export function createBot({
     s.digits = '';
     if (s.purpose === 'set') {
       if (isWeakPin(pin)) {
-        s.prompt =
-          'That PIN is too easy to guess. Choose a different 6-digit PIN.';
+        s.prompt = t('pin.weak');
         return edit(
           userId,
           messageId,
           `${s.prompt}\n\n<code>${dots(0)}</code>`,
-          { reply_markup: keypadMarkup(s.nonce) },
+          { reply_markup: keypadMarkup(s.nonce, t) },
         );
       }
       Object.assign(s, {
         purpose: 'repeat',
         first: pin,
-        prompt: 'Enter the same PIN again to confirm.',
+        prompt: t('pin.repeat_prompt'),
       });
       return edit(userId, messageId, `${s.prompt}\n\n<code>${dots(0)}</code>`, {
-        reply_markup: keypadMarkup(s.nonce),
+        reply_markup: keypadMarkup(s.nonce, t),
       });
     }
     if (s.purpose === 'repeat') {
@@ -767,24 +814,20 @@ export function createBot({
         Object.assign(s, {
           purpose: 'set',
           first: null,
-          prompt: 'The PINs didn’t match. Choose a 6-digit PIN.',
+          prompt: t('pin.mismatch'),
         });
         return edit(
           userId,
           messageId,
           `${s.prompt}\n\n<code>${dots(0)}</code>`,
-          { reply_markup: keypadMarkup(s.nonce) },
+          { reply_markup: keypadMarkup(s.nonce, t) },
         );
       }
       pinSessions.delete(userId);
       if (!store.getWallet(userId))
-        return edit(userId, messageId, 'Your wallet is no longer connected.');
+        return edit(userId, messageId, t('common.wallet_gone'));
       store.setPin(userId, await hashPin(pin));
-      return edit(
-        userId,
-        messageId,
-        '🔐 Payment PIN set. Paste a Lightning invoice any time to pay it.',
-      );
+      return edit(userId, messageId, t('pin.set_done'));
     }
     // purpose === 'pay'
     return finishPinForPayment(userId, messageId, s, pin);
@@ -793,21 +836,18 @@ export function createBot({
   // ---------------------------------------------------------------- sending
 
   async function startSend(userId, text) {
+    const t = tu(userId);
     const wallet = store.getWallet(userId);
-    if (!wallet)
-      return send(userId, 'Connect your wallet first with /connect.');
+    if (!wallet) return send(userId, t('common.connect_first'));
     const can = methodsOf(wallet);
     if (!can.has('pay_invoice') || !can.has('lookup_invoice')) {
-      return send(
-        userId,
-        'Sending isn’t enabled for this connection. In Blitz, create a connection with Send payments and Lookup Invoice enabled, then paste it here.',
-      );
+      return send(userId, t('send.not_enabled'));
     }
     if (!wallet.pin_hash) {
       return startPinSession(
         userId,
         { purpose: 'set' },
-        'Before your first payment, choose a 6-digit <b>payment PIN</b>. Then send the invoice again.',
+        t('pin.first_payment_prompt'),
       );
     }
 
@@ -821,18 +861,18 @@ export function createBot({
       return send(
         userId,
         {
-          network: 'That invoice isn’t for Bitcoin mainnet.',
-          no_amount:
-            'That invoice has no amount. Ask the recipient for an invoice with an amount.',
-          expired:
-            'That invoice has expired (or is about to). Ask the recipient for a new one.',
-        }[err.reason] ?? 'That doesn’t look like a valid Lightning invoice.',
+          network: t('send.err_network'),
+          no_amount: t('send.err_no_amount'),
+          expired: t('send.err_expired'),
+        }[err.reason] ?? t('send.err_invalid'),
       );
     }
     if (inv.amountMsat > config.maxPaymentSats * 1000) {
       return send(
         userId,
-        `That’s more than this bot allows per payment (${config.maxPaymentSats.toLocaleString('en-US')} sats). Use the Blitz app for larger payments.`,
+        t('send.over_limit', {
+          max: config.maxPaymentSats.toLocaleString('en-US'),
+        }),
       );
     }
     const blocking = store.blockingPaymentForHash(userId, inv.paymentHash);
@@ -840,14 +880,14 @@ export function createBot({
       return send(
         userId,
         blocking.status === 'paid'
-          ? 'You already paid this invoice.'
-          : 'A payment for this invoice is already in progress. Don’t pay it again — check /status.',
+          ? t('send.already_paid')
+          : t('send.already_in_progress'),
       );
     }
 
-    const t = now();
+    const nowMs = now();
     const id = randomId();
-    store.cancelAwaiting(userId, t);
+    store.cancelAwaiting(userId, nowMs);
     if (pinSessions.get(userId)?.purpose === 'pay') pinSessions.delete(userId);
     store.createPayment({
       id,
@@ -856,10 +896,10 @@ export function createBot({
       invoice: inv.invoice,
       amountMsat: inv.amountMsat,
       confirmExpiresAt: Math.min(
-        t + LIMITS.confirmTtlMs,
+        nowMs + LIMITS.confirmTtlMs,
         inv.expiresAt - 30_000,
       ),
-      now: t,
+      now: nowMs,
     });
     // Recipient-controlled text: strip control and bidi-override characters
     // that could visually rearrange the confirmation screen.
@@ -872,25 +912,27 @@ export function createBot({
             )
             .slice(0, 200),
         )
-      : '<i>none</i>';
+      : t('send.confirm_memo_none');
     return send(
       userId,
       [
-        '<b>You’re about to pay</b>',
+        t('send.confirm_title'),
         '',
-        `Amount: <b>${sats(inv.amountMsat)} sats</b> (+ network fee)`,
-        `Memo (written by the recipient): ${memo}`,
-        `Invoice expires in: ${minutesUntil(inv.expiresAt, t)} min`,
-        `Payment hash: <code>${inv.paymentHash.slice(0, 16)}…</code>`,
+        t('send.confirm_amount', { amount: sats(inv.amountMsat) }),
+        t('send.confirm_memo', { memo }),
+        t('send.confirm_expiry', {
+          minutes: minutesUntil(inv.expiresAt, nowMs),
+        }),
+        t('send.confirm_hash', { hash: inv.paymentHash.slice(0, 16) }),
         '',
-        'Only confirm if you expected this payment.',
+        t('send.confirm_warn'),
       ].join('\n'),
       {
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '✅ Confirm payment', callback_data: `pc:${id}` },
-              { text: 'Cancel', callback_data: `px:${id}` },
+              { text: t('send.button_confirm'), callback_data: `pc:${id}` },
+              { text: t('send.button_cancel'), callback_data: `px:${id}` },
             ],
           ],
         },
@@ -899,50 +941,46 @@ export function createBot({
   }
 
   async function confirmPayment(userId, messageId, paymentId) {
+    const t = tu(userId);
     const p = store.getPayment(paymentId, userId);
     if (
       !p ||
       p.status !== 'awaiting_confirmation' ||
       p.confirm_expires_at <= now()
     ) {
-      return edit(
-        userId,
-        messageId,
-        'This payment request has expired or was already handled. Paste the invoice again if you still want to pay it.',
-      );
+      return edit(userId, messageId, t('send.confirm_expired'));
     }
     const wallet = store.getWallet(userId);
     if (!wallet?.pin_hash)
-      return edit(userId, messageId, 'Your wallet is no longer connected.');
+      return edit(userId, messageId, t('common.wallet_gone'));
     if (wallet.pin_locked_until > now()) {
       return edit(
         userId,
         messageId,
-        `Payments are locked after too many wrong PINs. Try again in ${minutesUntil(wallet.pin_locked_until, now())} min.`,
+        t('pin.locked_try_later', {
+          minutes: minutesUntil(wallet.pin_locked_until, now()),
+        }),
       );
     }
     return startPinSession(
       userId,
       { purpose: 'pay', paymentId },
-      `Enter your PIN to pay <b>${sats(p.amount_msat)} sats</b>.`,
+      t('pin.pay_prompt', { amount: sats(p.amount_msat) }),
       messageId,
     );
   }
 
   async function finishPinForPayment(userId, messageId, s, pin) {
+    const t = tu(userId);
     const wallet = store.getWallet(userId);
     if (!wallet?.pin_hash) {
       pinSessions.delete(userId);
-      return edit(userId, messageId, 'Your wallet is no longer connected.');
+      return edit(userId, messageId, t('common.wallet_gone'));
     }
     if (wallet.pin_locked_until > now()) {
       pinSessions.delete(userId);
       store.cancelPayment(s.paymentId, userId, now());
-      return edit(
-        userId,
-        messageId,
-        'Payments are locked after too many wrong PINs. Nothing was sent.',
-      );
+      return edit(userId, messageId, t('pin.locked_nothing_sent'));
     }
     if (!(await verifyPin(pin, wallet.pin_hash))) {
       const r = store.recordPinFailure(
@@ -958,15 +996,14 @@ export function createBot({
       if (r.locked) {
         pinSessions.delete(userId);
         store.cancelPayment(s.paymentId, userId, now());
-        return edit(
-          userId,
-          messageId,
-          'Too many wrong PINs. Payments are locked for 1 hour. Nothing was sent.\nForgot your PIN? Use /disconnect and connect again.',
-        );
+        return edit(userId, messageId, t('pin.too_many_locked'));
       }
-      s.prompt = `Wrong PIN. ${r.remaining} attempt${r.remaining === 1 ? '' : 's'} left before payments are locked.`;
+      s.prompt =
+        r.remaining === 1
+          ? t('pin.wrong_remaining_one')
+          : t('pin.wrong_remaining_other', { count: r.remaining });
       return edit(userId, messageId, `${s.prompt}\n\n<code>${dots(0)}</code>`, {
-        reply_markup: keypadMarkup(s.nonce),
+        reply_markup: keypadMarkup(s.nonce, t),
       });
     }
     pinSessions.delete(userId);
@@ -981,28 +1018,27 @@ export function createBot({
         err,
       });
       store.cancelPayment(s.paymentId, userId, now());
-      return edit(
-        userId,
-        messageId,
-        'Your connection can’t be used anymore. Nothing was sent. Please /connect again.',
-      );
+      return edit(userId, messageId, t('send.conn_unusable'));
     }
     const payment = store.getPayment(s.paymentId, userId);
     if (
       !payment?.invoice ||
       !store.claimForSubmit(s.paymentId, userId, now())
     ) {
-      const reason =
-        store.inFlightPaymentCount(userId) > 0
-          ? 'Another payment is still in progress. Wait for it to finish (see /status).'
-          : 'This payment request has expired or was already handled.';
+      const busy = store.inFlightPaymentCount(userId) > 0;
       store.cancelPayment(s.paymentId, userId, now());
-      return edit(userId, messageId, `${reason} Nothing was sent.`);
+      return edit(
+        userId,
+        messageId,
+        busy
+          ? t('send.another_in_progress_nothing_sent')
+          : t('send.expired_nothing_sent'),
+      );
     }
     await edit(
       userId,
       messageId,
-      `⚡ Sending <b>${sats(payment.amount_msat)} sats</b>… Don’t pay this invoice again while this is in progress.`,
+      t('send.sending', { amount: sats(payment.amount_msat) }),
     );
     track(submitPayment(payment, conn));
   }
@@ -1011,6 +1047,7 @@ export function createBot({
   // before publishing; any outcome other than a definitive answer is
   // 'unknown' and goes to the reconciler. There is no retry path.
   async function submitPayment(payment, conn) {
+    const t = tu(payment.user_id);
     submitting.add(payment.id);
     try {
       const request = nwc.buildRequest(
@@ -1045,33 +1082,31 @@ export function createBot({
       // e.g. DB failure after claiming. The row stays 'submitting' and
       // recoverSubmitting() turns it into 'unknown' on the next start.
       log.error('payment submit failed', { err });
-      await send(
-        payment.user_id,
-        '⚠️ I couldn’t confirm this payment yet. <b>Don’t pay the invoice again.</b> Check Blitz; I’ll message you when I know more.',
-      );
+      await send(payment.user_id, t('send.submit_unknown'));
     } finally {
       submitting.delete(payment.id);
     }
   }
 
   function applyPaymentOutcome(payment, outcome, firstAttempt) {
-    const t = now();
+    const t = tu(payment.user_id);
+    const nowMs = now();
     const checks = firstAttempt ? 0 : payment.checks + 1;
     if (outcome.status === 'unknown') {
-      const givingUp = t - payment.created_at > LIMITS.unknownGiveUpMs;
+      const givingUp = nowMs - payment.created_at > LIMITS.unknownGiveUpMs;
       store.updatePayment(payment.id, {
         status: 'unknown',
         checks,
         nextCheckAt: givingUp
           ? null
-          : t + Math.min(6 * 60 * MIN, MIN * 2 ** checks),
-        now: t,
+          : nowMs + Math.min(6 * 60 * MIN, MIN * 2 ** checks),
+        now: nowMs,
       });
       if (firstAttempt) {
         return track(
           send(
             payment.user_id,
-            `⏳ I couldn’t confirm the payment of <b>${sats(payment.amount_msat)} sats</b> yet. It may still go through. <b>Don’t pay this invoice again.</b> I’ll message you when it’s resolved; you can also check /status or the Blitz app.`,
+            t('send.unknown_first', { amount: sats(payment.amount_msat) }),
           ),
         );
       }
@@ -1079,7 +1114,7 @@ export function createBot({
         return track(
           send(
             payment.user_id,
-            `⚠️ The payment of <b>${sats(payment.amount_msat)} sats</b> is still unconfirmed after 3 days. Please check the Blitz app for its final status.`,
+            t('send.unknown_giveup', { amount: sats(payment.amount_msat) }),
           ),
         );
       }
@@ -1090,7 +1125,7 @@ export function createBot({
         status: outcome.status,
         feeMsat: outcome.feeMsat ?? null,
         checks,
-        now: t,
+        now: nowMs,
       })
     )
       return;
@@ -1100,29 +1135,29 @@ export function createBot({
       const requested = store.openInvoiceByHash(payment.payment_hash);
       if (requested) track(reconcileInvoice(requested).catch(() => {}));
       const fee =
-        outcome.feeMsat != null ? ` (fee ${sats(outcome.feeMsat)} sats)` : '';
+        outcome.feeMsat != null
+          ? t('send.paid_fee', { fee: sats(outcome.feeMsat) })
+          : '';
       return track(
         send(
           payment.user_id,
-          `✅ Paid <b>${sats(payment.amount_msat)} sats</b>${fee}.`,
+          t('send.paid', { amount: sats(payment.amount_msat), fee }),
         ),
       );
     }
     const why =
       {
-        QUOTA_EXCEEDED:
-          'This would exceed the budget you set for this connection in Blitz.',
-        INSUFFICIENT_BALANCE:
-          'Your Wallet Connect account doesn’t have enough funds.',
-        RESTRICTED: 'This connection isn’t allowed to send payments.',
-        UNAUTHORIZED: 'The connection was removed in Blitz.',
-        RATE_LIMITED: 'The wallet is busy; try again in a moment.',
-        NOT_SENT: 'The wallet never received the request in time.',
-      }[outcome.reason] ?? 'The payment didn’t go through.';
+        QUOTA_EXCEEDED: t('send.fail_QUOTA_EXCEEDED'),
+        INSUFFICIENT_BALANCE: t('send.fail_INSUFFICIENT_BALANCE'),
+        RESTRICTED: t('send.fail_RESTRICTED'),
+        UNAUTHORIZED: t('send.fail_UNAUTHORIZED'),
+        RATE_LIMITED: t('send.fail_RATE_LIMITED'),
+        NOT_SENT: t('send.fail_NOT_SENT'),
+      }[outcome.reason] ?? t('send.fail_default');
     return track(
       send(
         payment.user_id,
-        `❌ Payment of <b>${sats(payment.amount_msat)} sats</b> failed. No money left your wallet. ${why}`,
+        t('send.failed', { amount: sats(payment.amount_msat), why }),
       ),
     );
   }
@@ -1177,21 +1212,19 @@ export function createBot({
     { amount, memo },
     { inlineMessageId } = {},
   ) {
+    const t = tu(userId);
     const wallet = store.getWallet(userId);
-    if (!wallet) return { error: 'Connect your wallet first with /connect.' };
+    if (!wallet) return { error: t('common.connect_first') };
     if (!methodsOf(wallet).has('make_invoice')) {
-      return {
-        error:
-          'Receiving isn’t enabled for this connection (enable Receive payments in Blitz and /connect again).',
-      };
+      return { error: t('receive.not_enabled') };
     }
     if (store.openInvoiceCount(userId) >= LIMITS.maxOpenInvoices) {
       return {
-        error: `You already have ${LIMITS.maxOpenInvoices} open invoices. Wait for them to be paid or expire (see /status).`,
+        error: t('receive.open_cap', { max: LIMITS.maxOpenInvoices }),
       };
     }
     if (!allow(userId, 'wallet')) {
-      return { error: 'Slow down a little and try again in a minute.' };
+      return { error: t('common.slow_down') };
     }
 
     const res = await walletCall(connFor(wallet), 'make_invoice', {
@@ -1199,7 +1232,7 @@ export function createBot({
       ...(memo ? { description: memo } : {}),
       expiry: LIMITS.invoiceExpirySec,
     });
-    if (!res.result) return { error: walletTrouble(res) };
+    if (!res.result) return { error: walletTrouble(res, t) };
     let inv;
     try {
       inv = decodeInvoice(
@@ -1211,20 +1244,14 @@ export function createBot({
       log.warn('wallet returned an unusable invoice', {
         user: log.user(userId),
       });
-      return {
-        error:
-          'Your wallet returned an invoice I couldn’t verify, so I won’t show it. Please try again.',
-      };
+      return { error: t('receive.unusable') };
     }
     if (inv.amountMsat !== amount * 1000) {
       log.warn('wallet invoice amount mismatch', { user: log.user(userId) });
-      return {
-        error:
-          'Your wallet returned an invoice for a different amount, so I won’t show it. Please try again.',
-      };
+      return { error: t('receive.amount_mismatch') };
     }
 
-    const t = now();
+    const nowMs = now();
     const id = randomId();
     const tracked = methodsOf(wallet).has('lookup_invoice');
     store.createInvoice({
@@ -1234,27 +1261,34 @@ export function createBot({
       amountMsat: inv.amountMsat,
       expiresAt: inv.expiresAt,
       nextCheckAt: tracked
-        ? nextInvoiceCheck({ created_at: t, expires_at: inv.expiresAt }, t)
+        ? nextInvoiceCheck(
+            { created_at: nowMs, expires_at: inv.expiresAt },
+            nowMs,
+          )
         : null,
       ...(inlineMessageId ? { invoice: inv.invoice, inlineMessageId } : {}),
-      now: t,
+      now: nowMs,
     });
     return { inv, id, tracked };
   }
 
   async function receive(userId, args) {
+    const t = tu(userId);
     const parsed = parseAmountMemo(args);
     if (!parsed) {
-      return send(
-        userId,
-        'Usage: <code>/receive 21000 optional memo</code> (amount in sats).',
-      );
+      return send(userId, t('receive.usage'));
     }
     const { inv, id, tracked, error } = await createInvoice(userId, parsed);
     if (error) return send(userId, error);
     await send(
       userId,
-      `Invoice for <b>${sats(inv.amountMsat)} sats</b>${parsed.memo ? ` (${escapeHtml(parsed.memo)})` : ''}, expires in ${minutesUntil(inv.expiresAt, now())} min:`,
+      t('receive.created', {
+        amount: sats(inv.amountMsat),
+        memo: parsed.memo
+          ? t('receive.created_memo', { memo: escapeHtml(parsed.memo) })
+          : '',
+        minutes: minutesUntil(inv.expiresAt, now()),
+      }),
     );
     return send(
       userId,
@@ -1263,7 +1297,7 @@ export function createBot({
         ? {
             reply_markup: {
               inline_keyboard: [
-                [{ text: '🔄 Check if paid', callback_data: `ic:${id}` }],
+                [{ text: t('receive.check_button'), callback_data: `ic:${id}` }],
               ],
             },
           }
@@ -1281,6 +1315,7 @@ export function createBot({
 
   async function onInlineQuery(q) {
     const userId = q.from.id;
+    const t = tu(userId, q.from.language_code);
     const answer = (results, button) =>
       safe(
         tg.call('answerInlineQuery', {
@@ -1297,18 +1332,20 @@ export function createBot({
     const wallet = store.getWallet(userId);
     if (!wallet || !methodsOf(wallet).has('make_invoice')) {
       return answer([], {
-        text: 'Connect your Blitz Wallet first',
+        text: t('inline.connect_button'),
         start_parameter: 'connect',
       });
     }
     const parsed = parseAmountMemo(q.query);
     if (!parsed) {
       return answer([], {
-        text: 'Type an amount in sats, e.g. 5000 pizza',
+        text: t('inline.hint'),
         start_parameter: 'help',
       });
     }
-    const memo = parsed.memo ? ` — ${escapeHtml(parsed.memo)}` : '';
+    const memo = parsed.memo
+      ? t('inline.posted_memo', { memo: escapeHtml(parsed.memo) })
+      : '';
     return answer([
       {
         type: 'article',
@@ -1316,17 +1353,19 @@ export function createBot({
         thumbnail_url: INLINE_THUMBNAIL_URL,
         thumbnail_width: 512,
         thumbnail_height: 512,
-        title: `Request ${sats(parsed.amount * 1000)} sats`,
-        description:
-          parsed.memo || 'Creates a Lightning invoice from your Blitz Wallet',
+        title: t('inline.title', { amount: sats(parsed.amount * 1000) }),
+        description: parsed.memo || t('inline.description'),
         input_message_content: {
-          message_text: `⚡ <b>${sats(parsed.amount * 1000)} sats</b> requested${memo}\nCreating invoice…`,
+          message_text: t('inline.creating', {
+            amount: sats(parsed.amount * 1000),
+            memo,
+          }),
           parse_mode: 'HTML',
         },
         // A keyboard is what makes Telegram hand us an inline_message_id to edit.
         reply_markup: {
           inline_keyboard: [
-            [{ text: '⏳ Creating invoice…', callback_data: 'nop:0' }],
+            [{ text: t('inline.creating_button'), callback_data: 'nop:0' }],
           ],
         },
       },
@@ -1335,6 +1374,7 @@ export function createBot({
 
   async function onChosenInlineResult(r) {
     const userId = r.from.id;
+    const t = tu(userId, r.from?.language_code);
     if (!r.inline_message_id) return;
     const editInline = (text, replyMarkup) =>
       safe(
@@ -1347,45 +1387,50 @@ export function createBot({
         }),
       );
     if (config.allowedUsers && !config.allowedUsers.has(userId)) {
-      return editInline('This bot is private.');
+      return editInline(t('common.private'));
     }
     // Re-parse: `query` comes from the client, nothing from the preview is trusted.
     const parsed = parseAmountMemo(r.query);
-    if (!parsed)
-      return editInline('Couldn’t create an invoice for that amount.');
+    if (!parsed) return editInline(t('inline.amount_fail'));
     const { inv, id, error } = await createInvoice(userId, parsed, {
       inlineMessageId: r.inline_message_id,
     });
     if (error) {
       // The explanation goes privately to the requester, not into the chat.
       await send(userId, error);
-      return editInline('Couldn’t create the invoice.');
+      return editInline(t('inline.create_fail'));
     }
-    const memo = parsed.memo ? ` — ${escapeHtml(parsed.memo)}` : '';
+    const memo = parsed.memo
+      ? t('inline.posted_memo', { memo: escapeHtml(parsed.memo) })
+      : '';
     // The invoice itself stays out of the message text: the buttons open it
     // in a wallet, copy it, or pay it through the bot.
     return editInline(
-      `⚡ <b>${sats(inv.amountMsat)} sats</b> requested${memo}\nExpires in ${minutesUntil(inv.expiresAt, now())} min.`,
-      invoiceButtons(inv.invoice, id),
+      t('inline.posted', {
+        amount: sats(inv.amountMsat),
+        memo,
+        minutes: minutesUntil(inv.expiresAt, now()),
+      }),
+      invoiceButtons(inv.invoice, id, t),
     );
   }
 
-  function invoiceButtons(invoice, id) {
+  function invoiceButtons(invoice, id, t = tFor('en')) {
     const copy =
       invoice.length <= MAX_COPY_TEXT
-        ? { text: '📋 Copy invoice', copy_text: { text: invoice } }
-        : { text: '📋 Copy invoice', url: `${PAY_PAGE_URL}#${invoice}` };
+        ? { text: t('inline.copy_invoice'), copy_text: { text: invoice } }
+        : { text: t('inline.copy_invoice'), url: `${PAY_PAGE_URL}#${invoice}` };
     return {
       inline_keyboard: [
         [
-          { text: '⚡ Open wallet', url: `${PAY_PAGE_URL}#open:${invoice}` },
+          { text: t('inline.open_wallet'), url: `${PAY_PAGE_URL}#open:${invoice}` },
           copy,
         ],
         [
           {
             text: config.botUsername
-              ? `Pay with @${config.botUsername}`
-              : 'Pay in Telegram',
+              ? t('inline.pay_with', { bot: config.botUsername })
+              : t('inline.pay_generic'),
             callback_data: `ip:${id}`,
           },
         ],
@@ -1398,14 +1443,15 @@ export function createBot({
   // (t.me/<bot>?start=pay_<id>) where the normal send flow takes over.
   async function payPostedInvoice(cq, id, answer) {
     const userId = cq.from.id;
+    const t = tu(userId, cq.from.language_code);
     if (config.allowedUsers && !config.allowedUsers.has(userId)) {
-      return answer('This bot is private.');
+      return answer(t('common.private'));
     }
-    if (!allow(userId, 'update')) return answer('Slow down a little.');
+    if (!allow(userId, 'update')) return answer(t('common.slow_down_short'));
     const inv = store.getPostedInvoice(id);
-    if (!inv) return answer('This invoice was already paid or has expired.');
-    if (inv.user_id === userId) return answer('This is your own invoice.');
-    if (!config.botUsername) return answer('Open the bot to pay this invoice.');
+    if (!inv) return answer(t('chatpay.gone'));
+    if (inv.user_id === userId) return answer(t('chatpay.own'));
+    if (!config.botUsername) return answer(t('chatpay.no_username'));
     return safe(
       tg.call('answerCallbackQuery', {
         callback_query_id: cq.id,
@@ -1415,18 +1461,19 @@ export function createBot({
   }
 
   async function payPosted(userId, id) {
+    const t = tu(userId);
     const inv = store.getPostedInvoice(id);
-    if (!inv)
-      return send(userId, 'That invoice was already paid or has expired.');
-    if (inv.user_id === userId) return send(userId, 'That’s your own invoice.');
+    if (!inv) return send(userId, t('chatpay.gone_private'));
+    if (inv.user_id === userId) return send(userId, t('chatpay.own_private'));
     return startSend(userId, inv.invoice);
   }
 
   // Returns the new status, or null if unchanged/unknown.
   async function reconcileInvoice(inv, { manual = false } = {}) {
+    const t = tu(inv.user_id);
     const wallet = store.getWallet(inv.user_id);
     if (!wallet) return null;
-    const t = now();
+    const nowMs = now();
     const res = await walletCall(connFor(wallet), 'lookup_invoice', {
       payment_hash: inv.payment_hash,
     });
@@ -1439,7 +1486,7 @@ export function createBot({
       (!r.type || r.type === 'incoming')
     ) {
       status = 'paid';
-    } else if ((r && r.state === 'expired') || t > inv.expires_at) {
+    } else if ((r && r.state === 'expired') || nowMs > inv.expires_at) {
       status = 'expired';
     }
     const checks = inv.checks + 1;
@@ -1448,8 +1495,8 @@ export function createBot({
         store.updateInvoice(inv.id, {
           status: 'open',
           checks,
-          nextCheckAt: nextInvoiceCheck(inv, t),
-          now: t,
+          nextCheckAt: nextInvoiceCheck(inv, nowMs),
+          now: nowMs,
         });
       return null;
     }
@@ -1458,13 +1505,16 @@ export function createBot({
         status,
         checks,
         nextCheckAt: null,
-        now: t,
+        now: nowMs,
       })
     )
       return null;
     if (status === 'paid')
       track(
-        send(inv.user_id, `💰 Received <b>${sats(inv.amount_msat)} sats</b>.`),
+        send(
+          inv.user_id,
+          t('receive.received', { amount: sats(inv.amount_msat) }),
+        ),
       );
     if (inv.inline_message_id) {
       track(
@@ -1474,8 +1524,12 @@ export function createBot({
             parse_mode: 'HTML',
             text:
               status === 'paid'
-                ? `✅ <b>${sats(inv.amount_msat)} sats</b> paid.`
-                : `⌛ Invoice for <b>${sats(inv.amount_msat)} sats</b> expired unpaid.`,
+                ? t('receive.invoice_paid_inline', {
+                    amount: sats(inv.amount_msat),
+                  })
+                : t('receive.invoice_expired_inline', {
+                    amount: sats(inv.amount_msat),
+                  }),
           }),
         ),
       );
@@ -1484,55 +1538,55 @@ export function createBot({
   }
 
   async function checkInvoice(userId, id) {
+    const t = tu(userId);
     const inv = store.getInvoice(id, userId);
-    if (!inv) return send(userId, 'I’m no longer tracking that invoice.');
+    if (!inv) return send(userId, t('invoice_check.not_tracking'));
     if (inv.status !== 'open')
       return send(
         userId,
         inv.status === 'paid'
-          ? 'That invoice is paid ✅'
-          : 'That invoice expired unpaid.',
+          ? t('invoice_check.paid')
+          : t('invoice_check.expired'),
       );
     if (!allow(userId, 'wallet'))
-      return send(userId, 'Slow down a little and try again in a minute.');
+      return send(userId, t('common.slow_down'));
     const status = await reconcileInvoice(inv, { manual: true });
-    if (!status) return send(userId, 'Not paid yet.');
-    if (status === 'expired')
-      return send(userId, 'That invoice expired unpaid.');
+    if (!status) return send(userId, t('invoice_check.not_paid'));
+    if (status === 'expired') return send(userId, t('invoice_check.expired'));
   }
 
   // ------------------------------------------------------------- read-only
 
   async function balance(userId) {
+    const t = tu(userId);
     const wallet = store.getWallet(userId);
-    if (!wallet)
-      return send(userId, 'Connect your wallet first with /connect.');
+    if (!wallet) return send(userId, t('common.connect_first'));
     if (!methodsOf(wallet).has('get_balance'))
-      return send(userId, 'Balance isn’t enabled for this connection.');
+      return send(userId, t('balance.not_enabled'));
     if (!allow(userId, 'wallet'))
-      return send(userId, 'Slow down a little and try again in a minute.');
+      return send(userId, t('common.slow_down'));
     const res = await walletCall(connFor(wallet), 'get_balance', {});
     const msat = Number(res.result?.balance);
     if (!res.result || !Number.isFinite(msat) || msat < 0)
-      return send(userId, walletTrouble(res));
-    return send(userId, `Wallet Connect balance: <b>${sats(msat)} sats</b>`);
+      return send(userId, walletTrouble(res, t));
+    return send(userId, t('balance.value', { amount: sats(msat) }));
   }
 
   async function transactions(userId, page, messageId) {
+    const t = tu(userId);
     const wallet = store.getWallet(userId);
-    if (!wallet)
-      return send(userId, 'Connect your wallet first with /connect.');
+    if (!wallet) return send(userId, t('common.connect_first'));
     if (!methodsOf(wallet).has('list_transactions'))
-      return send(userId, 'Transactions aren’t enabled for this connection.');
+      return send(userId, t('transactions.not_enabled'));
     page = Math.min(Math.max(0, Math.floor(page)), LIMITS.txMaxPages - 1);
     if (!allow(userId, 'wallet'))
-      return send(userId, 'Slow down a little and try again in a minute.');
+      return send(userId, t('common.slow_down'));
     const res = await walletCall(connFor(wallet), 'list_transactions', {
       limit: LIMITS.txPageSize,
       offset: page * LIMITS.txPageSize,
     });
     const list = res.result?.transactions;
-    if (!Array.isArray(list)) return send(userId, walletTrouble(res));
+    if (!Array.isArray(list)) return send(userId, walletTrouble(res, t));
 
     // Memos are deliberately not shown: they can hold personal details and
     // Telegram keeps chat history. They remain visible in the Blitz app.
@@ -1541,27 +1595,28 @@ export function createBot({
       if (!Number.isFinite(amount) || amount < 0) return [];
       const when = Number.isFinite(Number(tx.created_at))
         ? fmtDate(Number(tx.created_at))
-        : 'unknown date';
-      const dir = tx.type === 'incoming' ? '⬇️ Received' : '⬆️ Sent';
+        : t('transactions.unknown_date');
+      const dir =
+        tx.type === 'incoming' ? t('transactions.received') : t('transactions.sent');
       const fee =
         Number(tx.fees_paid) > 0 && tx.type !== 'incoming'
-          ? ` · fee ${sats(Number(tx.fees_paid))}`
+          ? t('transactions.fee', { fee: sats(Number(tx.fees_paid)) })
           : '';
       const state = ['pending', 'failed', 'expired'].includes(tx.state)
-        ? ` · ${tx.state}`
+        ? t('transactions.state', { state: tx.state })
         : '';
       return [`${when}  ${dir} <b>${sats(amount)}</b> sats${fee}${state}`];
     });
     const text = lines.length
-      ? `<b>Wallet Connect activity</b> (page ${page + 1})\n\n${lines.join('\n')}`
+      ? `${t('transactions.title', { page: page + 1 })}\n\n${lines.join('\n')}`
       : page === 0
-        ? 'No transactions yet.'
-        : 'No more transactions.';
+        ? t('transactions.empty')
+        : t('transactions.empty_page');
     const nav = [];
     if (page > 0)
-      nav.push({ text: '« Newer', callback_data: `tx:${page - 1}` });
+      nav.push({ text: t('transactions.newer'), callback_data: `tx:${page - 1}` });
     if (list.length >= LIMITS.txPageSize && page < LIMITS.txMaxPages - 1)
-      nav.push({ text: 'Older »', callback_data: `tx:${page + 1}` });
+      nav.push({ text: t('transactions.older'), callback_data: `tx:${page + 1}` });
     const extra = nav.length
       ? { reply_markup: { inline_keyboard: [nav] } }
       : {};
@@ -1570,40 +1625,37 @@ export function createBot({
       : send(userId, text, extra);
   }
 
-  const PAY_LABEL = {
-    submitting: '⏳ sending',
-    unknown: '⏳ unconfirmed',
-    paid: '✅ paid',
-    failed: '❌ failed',
-    cancelled: 'cancelled',
-  };
-  const INV_LABEL = {
-    open: '⏳ waiting',
-    paid: '✅ paid',
-    expired: 'expired',
-    untracked: 'not tracked',
-  };
-
   async function status(userId) {
+    const t = tu(userId);
+    const PAY_LABEL = {
+      submitting: t('status.pay_submitting'),
+      unknown: t('status.pay_unknown'),
+      paid: t('status.pay_paid'),
+      failed: t('status.pay_failed'),
+      cancelled: t('status.pay_cancelled'),
+    };
+    const INV_LABEL = {
+      open: t('status.inv_open'),
+      paid: t('status.inv_paid'),
+      expired: t('status.inv_expired'),
+      untracked: t('status.inv_untracked'),
+    };
     if (!store.getWallet(userId))
-      return send(userId, 'Connect your wallet first with /connect.');
+      return send(userId, t('common.connect_first'));
     const payments = store.recentPayments(userId);
     const invoices = store.recentInvoices(userId);
     if (!payments.length && !invoices.length)
-      return send(
-        userId,
-        'Nothing to report: no recent payments or invoices from this bot.',
-      );
+      return send(userId, t('status.nothing'));
     const lines = [];
     if (payments.length) {
-      lines.push('<b>Payments</b>');
+      lines.push(t('status.payments_title'));
       for (const p of payments)
         lines.push(
           `${fmtDate(p.created_at / 1000)}  ${sats(p.amount_msat)} sats  ${PAY_LABEL[p.status] ?? p.status}`,
         );
     }
     if (invoices.length) {
-      lines.push('', '<b>Invoices</b>');
+      lines.push('', t('status.invoices_title'));
       for (const i of invoices)
         lines.push(
           `${fmtDate(i.created_at / 1000)}  ${sats(i.amount_msat)} sats  ${INV_LABEL[i.status] ?? i.status}`,
@@ -1619,7 +1671,7 @@ export function createBot({
         ? {
             reply_markup: {
               inline_keyboard: [
-                [{ text: '🔄 Refresh', callback_data: 'sr:all' }],
+                [{ text: t('status.refresh'), callback_data: 'sr:all' }],
               ],
             },
           }
@@ -1628,8 +1680,9 @@ export function createBot({
   }
 
   async function refreshStatus(userId) {
+    const t = tu(userId);
     if (!allow(userId, 'wallet'))
-      return send(userId, 'Slow down a little and try again in a minute.');
+      return send(userId, t('common.slow_down'));
     for (const p of store.recentPayments(userId))
       if (p.status === 'unknown') await reconcilePayment(p);
     for (const i of store.recentInvoices(userId))
@@ -1640,21 +1693,19 @@ export function createBot({
   // ------------------------------------------------------------- disconnect
 
   async function askDisconnect(userId) {
-    if (!store.getWallet(userId))
-      return send(userId, 'No wallet is connected.');
+    const t = tu(userId);
+    if (!store.getWallet(userId)) return send(userId, t('disconnect.none'));
     const warn =
-      store.inFlightPaymentCount(userId) > 0
-        ? '\n\n⚠️ A payment is still unconfirmed; after disconnecting I can’t tell you how it ends — check Blitz.'
-        : '';
+      store.inFlightPaymentCount(userId) > 0 ? t('disconnect.inflight_warn') : '';
     return send(
       userId,
-      `Disconnect your wallet? I’ll delete the connection and everything I stored about your payments and invoices.${warn}`,
+      t('disconnect.prompt', { warn }),
       {
         reply_markup: {
           inline_keyboard: [
             [
-              { text: 'Disconnect', callback_data: 'dc:yes' },
-              { text: 'Keep', callback_data: 'dc:no' },
+              { text: t('disconnect.button_yes'), callback_data: 'dc:yes' },
+              { text: t('disconnect.button_no'), callback_data: 'dc:no' },
             ],
           ],
         },
@@ -1663,15 +1714,12 @@ export function createBot({
   }
 
   async function disconnect(userId, messageId) {
+    const t = tu(userId);
     store.deleteUser(userId);
     pinSessions.delete(userId);
     pairings.get(userId)?.abort();
     log.info('wallet disconnected', { user: log.user(userId) });
-    return edit(
-      userId,
-      messageId,
-      'Disconnected. I deleted your connection and all related data.\n\n<b>To fully revoke access</b>, open Blitz → Settings → Wallet Connect and delete the Telegram connection. Until you do, that connection string still works.',
-    );
+    return edit(userId, messageId, t('disconnect.done'));
   }
 
   // ------------------------------------------------------------ maintenance
@@ -1682,17 +1730,19 @@ export function createBot({
     if (maintenanceRunning) return;
     maintenanceRunning = true;
     try {
-      const t = now();
-      store.expireConfirmations(t);
-      await Promise.allSettled(store.duePayments(t, 10).map(reconcilePayment));
+      const nowMs = now();
+      store.expireConfirmations(nowMs);
       await Promise.allSettled(
-        store.dueInvoices(t, 10).map(inv => reconcileInvoice(inv)),
+        store.duePayments(nowMs, 10).map(reconcilePayment),
       );
-      store.purge(t, LIMITS.retentionMs);
+      await Promise.allSettled(
+        store.dueInvoices(nowMs, 10).map(inv => reconcileInvoice(inv)),
+      );
+      store.purge(nowMs, LIMITS.retentionMs);
       for (const [userId, s] of pinSessions)
-        if (s.expiresAt < t) pinSessions.delete(userId);
+        if (s.expiresAt < nowMs) pinSessions.delete(userId);
       for (const [key, b] of buckets)
-        if (t - b.at > 10 * MIN) buckets.delete(key);
+        if (nowMs - b.at > 10 * MIN) buckets.delete(key);
     } catch (err) {
       log.error('maintenance failed', { err });
     } finally {

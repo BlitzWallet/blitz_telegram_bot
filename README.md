@@ -86,7 +86,7 @@ back up the encryption key alongside the database.**
 
 ## Using the bot (users)
 
-1. Send `/connect`. Tap **Connect in Blitz** on the phone with Blitz (or scan
+1. Send `/connect`. Pick your language, then tap **Connect in Blitz** on the phone with Blitz (or scan
    the `nostr+walletauth://` text with Blitz on another device). Blitz shows
    what the bot asks for; "Send payments" is off unless you turn it on, and
    sending is capped by the daily limit shown. Approve.
@@ -95,7 +95,7 @@ back up the encryption key alongside the database.**
    (NWC-08). If you allowed sending, set a 6-digit payment PIN on the inline
    keypad (it never appears in chat history).
 3. Commands: `/balance`, `/receive 21000 memo`, `/send` (or paste an invoice),
-   `/transactions`, `/status`, `/disconnect`, `/help`.
+   `/transactions`, `/status`, `/disconnect`, `/help`, `/language`.
 
 **Request money in any chat (inline mode):** type `@YourBot 5000 pizza` in
 any chat and tap the result. The bot creates the invoice in your Blitz wallet

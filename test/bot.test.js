@@ -837,10 +837,15 @@ function findUrlButton(h) {
 }
 const settlePairing = h =>
   new Promise(r => setTimeout(r, 20)).then(() => h.settle());
+// /connect now asks for language first; pick English then the pairing link follows.
+async function connectAndPair(h, userId) {
+  await h.say(userId, '/connect');
+  await h.pressButton(userId, 'lg:en');
+}
 
 test('pairing: link carries only public data and the requested limits', async () => {
   const h = createHarness();
-  await h.say(ALICE, '/connect');
+  await connectAndPair(h, ALICE);
   const link = new URL(findUrlButton(h));
   assert.equal(link.origin + link.pathname, 'https://blitzwallet.app/nwc/auth');
   const p = link.searchParams;
@@ -862,7 +867,7 @@ test('pairing: link carries only public data and the requested limits', async ()
 
 test('pairing: approval stores the connection; the secret never leaves the bot', async () => {
   const h = createHarness();
-  await h.say(ALICE, '/connect');
+  await connectAndPair(h, ALICE);
   const appKey = h.wallet.approvePairing(findUrlButton(h));
   await settlePairing(h);
   const row = h.store.getWallet(ALICE);
@@ -889,7 +894,7 @@ test('pairing: approval stores the connection; the secret never leaves the bot',
 
 test('pairing: receive-only approval skips the PIN and disables sending', async () => {
   const h = createHarness();
-  await h.say(ALICE, '/connect');
+  await connectAndPair(h, ALICE);
   h.wallet.approvePairing(findUrlButton(h), { grantOptional: false });
   await settlePairing(h);
   assert.ok(h.store.getWallet(ALICE));
@@ -906,7 +911,7 @@ test('pairing: wrong state, wrong recipient or a forged signature are ignored', 
     { tamper: true },
   ]) {
     const h = createHarness();
-    await h.say(ALICE, '/connect');
+    await connectAndPair(h, ALICE);
     h.wallet.approvePairing(findUrlButton(h), overrides);
     await settlePairing(h);
     assert.equal(
@@ -919,7 +924,7 @@ test('pairing: wrong state, wrong recipient or a forged signature are ignored', 
 
 test('pairing: a relay outside the allowlist is refused', async () => {
   const h = createHarness();
-  await h.say(ALICE, '/connect');
+  await connectAndPair(h, ALICE);
   h.wallet.approvePairing(findUrlButton(h), { relays: ['wss://evil.example'] });
   await settlePairing(h);
   assert.equal(h.store.getWallet(ALICE), undefined);
@@ -928,9 +933,9 @@ test('pairing: a relay outside the allowlist is refused', async () => {
 
 test('pairing: a newer link replaces the old one; disconnect cancels it', async () => {
   const h = createHarness();
-  await h.say(ALICE, '/connect');
+  await connectAndPair(h, ALICE);
   const first = findUrlButton(h);
-  await h.say(ALICE, '/connect');
+  await connectAndPair(h, ALICE);
   h.wallet.approvePairing(first);
   await settlePairing(h);
   assert.equal(
@@ -951,7 +956,7 @@ test('pairing: link expires', async () => {
   LIMITS.pairingTimeoutMs = 50;
   try {
     const h = createHarness();
-    await h.say(ALICE, '/connect');
+    await connectAndPair(h, ALICE);
     const link = findUrlButton(h);
     await new Promise(r => setTimeout(r, 80));
     await h.settle();
@@ -980,6 +985,41 @@ test('pairing: the manual paste flow is still available', async () => {
   const h = createHarness();
   await h.say(ALICE, '/connect_manual');
   assert.match(h.tg.lastText(), /Connect manually/);
+});
+
+test('language: /connect asks for language first, then pairs in that language', async () => {
+  const h = createHarness();
+  await h.say(ALICE, '/connect');
+  assert.match(h.tg.lastText(), /Choose your language/);
+  assert.equal(findUrlButton(h), null, 'no pairing link before language choice');
+  await h.pressButton(ALICE, 'lg:es');
+  assert.equal(h.store.getLocale(ALICE), 'es');
+  assert.ok(
+    findUrlButton(h)?.startsWith('https://blitzwallet.app/nwc/auth'),
+    'pairing link follows language choice',
+  );
+  assert.match(h.tg.lastText(), /nostr\+walletauth:\/\//);
+});
+
+test('language: /language switches language without pairing', async () => {
+  const h = createHarness();
+  await h.say(ALICE, '/language');
+  assert.match(h.tg.lastText(), /Choose your language/);
+  await h.pressButton(ALICE, 'll:fr');
+  assert.equal(h.store.getLocale(ALICE), 'fr');
+  assert.match(h.tg.lastText(), /Langue définie sur/);
+  assert.equal(findUrlButton(h), null, '/language must not start pairing');
+  await h.say(ALICE, '/balance');
+  assert.match(h.tg.lastText(), /Connecte d'abord/);
+});
+
+test('language: stored locale persists and unknown codes fall back to English', async () => {
+  const h = createHarness();
+  await h.say(ALICE, '/language');
+  await h.pressButton(ALICE, 'll:ru');
+  assert.equal(h.store.getLocale(ALICE), 'ru');
+  await h.say(ALICE, '/help');
+  assert.match(h.tg.lastText(), /Blitz Wallet для Telegram/);
 });
 
 // ---------------------------------------------------------------- inline mode
@@ -1018,6 +1058,7 @@ test('inline: unconnected users get a connect shortcut, never cached', async () 
   assert.equal(a.is_personal, true);
   assert.equal(a.cache_time, 0);
   await h.say(ALICE, '/start connect');
+  await h.pressButton(ALICE, 'lg:en');
   assert.ok(
     findUrlButton(h)?.startsWith('https://blitzwallet.app/nwc/auth'),
     '/start connect starts pairing',

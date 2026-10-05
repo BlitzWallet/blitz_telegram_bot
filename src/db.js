@@ -54,6 +54,12 @@ const MIGRATIONS = [
   `ALTER TABLE invoices ADD COLUMN invoice TEXT;
    ALTER TABLE invoices ADD COLUMN inline_message_id TEXT;
    CREATE INDEX invoices_hash ON invoices(payment_hash, status);`,
+  // Per-user language choice for /connect (persists even without a wallet).
+  `CREATE TABLE IF NOT EXISTS user_locales (
+     user_id INTEGER PRIMARY KEY,
+     locale TEXT NOT NULL,
+     updated_at INTEGER NOT NULL
+   );`,
 ];
 
 export const IN_FLIGHT = ['submitting', 'unknown'];
@@ -161,6 +167,20 @@ function createStore(db) {
         q('DELETE FROM invoices WHERE user_id = ?').run(userId);
         q('DELETE FROM wallets WHERE user_id = ?').run(userId);
       }),
+
+    // --- language --------------------------------------------------------
+    // Chosen via /connect or /language. Kept on disconnect so a reconnect
+    // remembers it; falls back to 'en' when never set.
+    getLocale: userId =>
+      q('SELECT locale FROM user_locales WHERE user_id = ?').get(userId)
+        ?.locale ?? null,
+    setLocale: (userId, locale, now) =>
+      q(
+        `INSERT INTO user_locales (user_id, locale, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET locale = excluded.locale,
+           updated_at = excluded.updated_at`,
+      ).run(userId, locale, now),
 
     // --- payments ----------------------------------------------------------
     createPayment: p =>

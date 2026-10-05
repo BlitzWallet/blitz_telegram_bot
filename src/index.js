@@ -4,6 +4,7 @@ import { createBot } from './bot.js';
 import { loadConfig } from './config.js';
 import { createKeyring } from './crypto.js';
 import { openDb } from './db.js';
+import { t } from './i18n.js';
 import { createLogger, redact } from './log.js';
 import { createNwcClient } from './nwc.js';
 import { createTelegram } from './telegram.js';
@@ -65,14 +66,15 @@ async function main() {
   await tg
     .call('setMyCommands', {
       commands: [
-        ['balance', 'Wallet Connect balance'],
-        ['receive', 'Create an invoice: /receive 21000 memo'],
-        ['send', 'Pay a Lightning invoice'],
-        ['transactions', 'Recent activity'],
-        ['status', 'Tracked payments and invoices'],
-        ['connect', 'Connect your Blitz Wallet'],
-        ['disconnect', 'Remove your wallet from this bot'],
-        ['help', 'Help and safety tips'],
+        ['balance', t('commands.balance')],
+        ['receive', t('commands.receive')],
+        ['send', t('commands.send')],
+        ['transactions', t('commands.transactions')],
+        ['status', t('commands.status')],
+        ['connect', t('commands.connect')],
+        ['disconnect', t('commands.disconnect')],
+        ['help', t('commands.help')],
+        ['language', t('commands.language')],
       ].map(([command, description]) => ({ command, description })),
     })
     .catch(err => log.warn('setMyCommands failed', { err }));

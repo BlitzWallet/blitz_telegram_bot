@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "dotenv": "^18.0.5",
+    "i18next": "^26.4.2",
     "light-bolt11-decoder": "^3.2.0",
     "nostr-tools": "^2.25.2"
   }
