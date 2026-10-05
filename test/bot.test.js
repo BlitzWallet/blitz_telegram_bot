@@ -11,6 +11,7 @@ import {
   createHarness,
   makeInvoice,
   newPreimage,
+  RELAY,
 } from './helpers.js';
 
 const ALICE = 1001;
@@ -1493,4 +1494,85 @@ test('chat pay: an expired posted invoice is marked expired and can no longer be
   await h.connect(BOB);
   await h.say(BOB, `/start pay_${id}`);
   assert.match(h.tg.lastText(), /already paid or has expired/);
+});
+
+// ------------------------------------------------- one user can't stall all (M5/M6)
+
+test('maintenance: rows whose check throws are logged and backed off, never starving others (M5)', async () => {
+  const h = createHarness({ wallet: invoicingWallet() });
+  await h.connect(ALICE);
+  await h.say(ALICE, '/receive 1000');
+  const made = h.wallet.made[0];
+  // Twelve users whose secrets no longer decrypt (e.g. a partial key
+  // rotation), each with an invoice that is due before Alice's.
+  for (let u = 1; u <= 12; u++) {
+    h.store.upsertWallet({
+      userId: u,
+      walletPubkey: 'ab'.repeat(32),
+      relays: [RELAY],
+      secretEnc: 'not-decryptable',
+      encryption: 'nip44_v2',
+      methods: ['make_invoice', 'lookup_invoice'],
+      now: h.clock.now,
+    });
+    h.store.createInvoice({
+      id: `bad${u}`,
+      userId: u,
+      paymentHash: newPreimage().paymentHash,
+      amountMsat: 1000,
+      expiresAt: h.clock.now + 3600_000,
+      nextCheckAt: h.clock.now - 1000,
+      now: h.clock.now - 1000,
+    });
+  }
+  h.wallet.handlers.lookup_invoice = () => ({
+    result: { type: 'incoming', state: 'settled', preimage: made.preimage },
+  });
+  h.clock.now += 61_000;
+  await h.bot.runMaintenance(); // the bad rows fill this batch...
+  await h.bot.runMaintenance(); // ...and are out of the way for this one
+  await h.bot.runMaintenance();
+  assert.equal(h.store.recentInvoices(ALICE)[0].status, 'paid');
+  assert.ok(h.logs.some(l => l.includes('invoice status check failed')));
+  const bad = h.store.recentInvoices(1)[0];
+  assert.equal(bad.status, 'open');
+  assert.ok(bad.next_check_at > h.clock.now, 'rescheduled with backoff');
+});
+
+test('security: a flooding user gets one "slow down" per burst, not one per message (M6)', async () => {
+  const h = createHarness();
+  for (let i = 0; i < 100; i++) await h.say(BOB, '/help');
+  const slow = h.tg.sent().filter(t => /Slow down/.test(t));
+  assert.equal(slow.length, 1);
+  assert.equal(h.tg.sent().length, 41, '40 replies + 1 warning');
+});
+
+test('pairing: a flood of links cannot block a real user; the check button finds the approval (M6)', async () => {
+  const saved = [LIMITS.maxLivePairings, LIMITS.maxPendingPairings];
+  Object.assign(LIMITS, { maxLivePairings: 2, maxPendingPairings: 4 });
+  try {
+    const h = createHarness();
+    // Throwaway accounts fill every live subscription and most of the table.
+    for (const u of [11, 12, 13, 14, 15]) await connectAndPair(h, u);
+    assert.equal(h.wallet.pool.subscriptions(), 2, 'live subscriptions capped');
+
+    await connectAndPair(h, ALICE);
+    const link = findUrlButton(h);
+    assert.ok(link, 'a link is still issued');
+    await h.pressButton(ALICE, 'pd:');
+    assert.match(h.tg.lastText(), /hasn’t approved this link yet/);
+
+    // A stranger's junk event p-tagged to Alice's key must not hide the real one.
+    h.wallet.approvePairing(link, { state: 'ab'.repeat(16) });
+    h.wallet.approvePairing(link);
+    await h.pressButton(ALICE, 'pd:');
+    assert.equal(h.store.getWallet(ALICE).wallet_pubkey, h.wallet.pubkey);
+    assert.match(h.tg.lastText(), /payment PIN/);
+
+    // Per user: 3 links, then throttled.
+    for (let i = 0; i < 4; i++) await connectAndPair(h, BOB);
+    assert.match(h.tg.lastText(), /Slow down/);
+  } finally {
+    [LIMITS.maxLivePairings, LIMITS.maxPendingPairings] = saved;
+  }
 });

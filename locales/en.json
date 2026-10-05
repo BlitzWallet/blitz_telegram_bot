@@ -53,7 +53,10 @@
     "approved_but_inflight": "Blitz approved the connection, but a payment is still being confirmed, so I didn’t switch. Delete the new connection in $t(paths.both) and try /connect again later.",
     "relay_unsupported": "Your wallet asked to use a relay this bot doesn’t support, so I didn’t connect. Delete the new connection in $t(paths.both).",
     "expired": "The connection link expired. Send /connect for a new one.",
-    "no_budget_warning": "⚠️ No spending limit was configured for this connection: if you allow sending, Blitz will treat it as unlimited. Set a daily budget in Blitz if you want one."
+    "no_budget_warning": "⚠️ No spending limit was configured for this connection: if you allow sending, Blitz will treat it as unlimited. Set a daily budget in Blitz if you want one.",
+    "check_button": "I’ve approved it",
+    "check_hint": "Approved in Blitz but no reply here? Tap “I’ve approved it”.",
+    "not_yet": "Blitz hasn’t approved this link yet. Approve it in Blitz, then tap “I’ve approved it” again."
   },
   "pin": {
     "expired": "This keypad has expired.",

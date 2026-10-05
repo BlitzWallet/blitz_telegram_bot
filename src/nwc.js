@@ -78,6 +78,66 @@ export function createNwcClient({
     return tag[1]?.split(/\s+/).includes('nip44_v2') ? 'nip44_v2' : 'nip04';
   }
 
+  // Checks a wallet's NWC-08 approval event: null when it isn't one for this
+  // link, the connection info when it is, ConnectionStringError when the
+  // wallet asks for a relay outside the allowlist.
+  function readPairingEvent(ev, { clientPubkey, state, relays }) {
+    const tag = name => ev.tags?.find(t => t[0] === name);
+    if (
+      ev.kind !== 13194 ||
+      !HEX64.test(ev.pubkey || '') ||
+      tag('p')?.[1] !== clientPubkey ||
+      tag('state')?.[1] !== state ||
+      !verifyEvent(ev)
+    ) {
+      return null;
+    }
+    // Spec: when the wallet names relays, use those instead of ours. They
+    // still have to be on the allowlist.
+    const named = ev.tags.filter(t => t[0] === 'relay').map(t => t[1]);
+    let walletRelays = relays;
+    if (named.length) {
+      walletRelays = named.filter(r => {
+        try {
+          return allowed.has(normalizeURL(r));
+        } catch {
+          return false;
+        }
+      });
+      if (!walletRelays.length) throw new ConnectionStringError('relay');
+    }
+    const encryption = tag('encryption');
+    return {
+      walletPubkey: ev.pubkey,
+      relays: walletRelays,
+      encryption: encryption?.[1]?.split(/\s+/).includes('nip44_v2')
+        ? 'nip44_v2'
+        : 'nip04',
+      methods: String(ev.content).split(/\s+/).filter(Boolean),
+    };
+  }
+
+  // One-shot version of waitForPairing for links without a live
+  // subscription: the approval is a stored event, so a query finds it.
+  // Every match is checked, so a junk event p-tagged to our key can't hide
+  // the real one.
+  async function findPairing(
+    { clientPubkey, state, relays },
+    { maxWait = 5000 } = {},
+  ) {
+    checkRelays(relays);
+    const events = await pool.querySync(
+      relays,
+      { kinds: [13194], '#p': [clientPubkey] },
+      { maxWait },
+    );
+    for (const ev of events) {
+      const info = readPairingEvent(ev, { clientPubkey, state, relays });
+      if (info) return info;
+    }
+    return null;
+  }
+
   // NWC-08 pairing: the bot made the key, so nothing secret is ever pasted.
   // Resolves when the wallet publishes its info event addressed to our key
   // (`p`) and echoing our `state`; the signature makes the author the wallet.
@@ -107,41 +167,13 @@ export function createNwcClient({
       signal?.addEventListener('abort', onAbort);
 
       const onevent = ev => {
-        const tag = name => ev.tags?.find(t => t[0] === name);
-        if (
-          ev.kind !== 13194 ||
-          !HEX64.test(ev.pubkey || '') ||
-          tag('p')?.[1] !== clientPubkey ||
-          tag('state')?.[1] !== state ||
-          !verifyEvent(ev)
-        ) {
-          return;
+        let info;
+        try {
+          info = readPairingEvent(ev, { clientPubkey, state, relays });
+        } catch (err) {
+          return finish(reject, err);
         }
-        // Spec: when the wallet names relays, use those instead of ours. They
-        // still have to be on the allowlist.
-        const named = ev.tags.filter(t => t[0] === 'relay').map(t => t[1]);
-        let walletRelays = relays;
-        if (named.length) {
-          walletRelays = named.filter(r => {
-            try {
-              return allowed.has(normalizeURL(r));
-            } catch {
-              return false;
-            }
-          });
-          if (!walletRelays.length) {
-            return finish(reject, new ConnectionStringError('relay'));
-          }
-        }
-        const encryption = tag('encryption');
-        finish(resolve, {
-          walletPubkey: ev.pubkey,
-          relays: walletRelays,
-          encryption: encryption?.[1]?.split(/\s+/).includes('nip44_v2')
-            ? 'nip44_v2'
-            : 'nip04',
-          methods: String(ev.content).split(/\s+/).filter(Boolean),
-        });
+        if (info) finish(resolve, info);
       };
       sub = pool.subscribe(
         relays,
@@ -258,6 +290,7 @@ export function createNwcClient({
   return {
     negotiateEncryption,
     waitForPairing,
+    findPairing,
     buildRequest,
     send,
     call: (conn, method, params = {}, opts = {}) =>

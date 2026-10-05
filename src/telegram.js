@@ -13,7 +13,23 @@ export class TelegramError extends Error {
 export function createTelegram({ token, fetchImpl = fetch, log }) {
   const base = `https://api.telegram.org/bot${token}/`;
 
-  async function call(
+  // A 429 means the bot's send quota is momentarily full (possibly because
+  // other users are flooding it). Wait it out instead of dropping the message,
+  // so payment results still arrive (M6).
+  async function call(method, params = {}, opts = {}) {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await callOnce(method, params, opts);
+      } catch (err) {
+        const wait = err.retryAfter;
+        if (err.code !== 429 || attempt >= 3 || !(wait > 0 && wait <= 60))
+          throw err;
+        await sleep(wait * 1000, undefined, { signal: opts.signal });
+      }
+    }
+  }
+
+  async function callOnce(
     method,
     params = {},
     { timeoutMs = 15_000, signal } = {},

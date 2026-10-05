@@ -53,7 +53,10 @@
     "approved_but_inflight": "Blitz hat die Verbindung bestätigt, aber eine Zahlung wird noch bestätigt, daher habe ich nicht gewechselt. Lösche die neue Verbindung in $t(paths.both) und versuche /connect später erneut.",
     "relay_unsupported": "Deine Wallet wollte ein Relay nutzen, das dieser Bot nicht unterstützt, daher habe ich nicht verbunden. Lösche die neue Verbindung in $t(paths.both).",
     "expired": "Der Verbindungslink ist abgelaufen. Sende /connect für einen neuen Link.",
-    "no_budget_warning": "⚠️ Für diese Verbindung wurde kein Ausgabenlimit festgelegt: Wenn du Senden erlaubst, behandelt Blitz sie als unbegrenzt. Lege in Blitz ein Tagesbudget fest, wenn du eines möchtest."
+    "no_budget_warning": "⚠️ Für diese Verbindung wurde kein Ausgabenlimit festgelegt: Wenn du Senden erlaubst, behandelt Blitz sie als unbegrenzt. Lege in Blitz ein Tagesbudget fest, wenn du eines möchtest.",
+    "check_button": "Ich habe bestätigt",
+    "check_hint": "In Blitz bestätigt, aber hier keine Antwort? Tippe auf „Ich habe bestätigt“.",
+    "not_yet": "Blitz hat diesen Link noch nicht bestätigt. Bestätige ihn in Blitz und tippe dann erneut auf „Ich habe bestätigt“."
   },
   "pin": {
     "expired": "Dieses Tastenfeld ist abgelaufen.",

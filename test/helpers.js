@@ -80,17 +80,17 @@ export function createFakeWallet({ encryption = 'nip44_v2' } = {}) {
     get_balance: () => ({ result: { balance: 21_000_000 } }),
   };
 
+  const matches = (f, ev) =>
+    (!f.kinds || f.kinds.includes(ev.kind)) &&
+    (!f.authors || f.authors.includes(ev.pubkey)) &&
+    (!f['#e'] ||
+      ev.tags.some(t => t[0] === 'e' && f['#e'].includes(t[1]))) &&
+    (!f['#p'] || ev.tags.some(t => t[0] === 'p' && f['#p'].includes(t[1])));
+  const stored = []; // what the relay keeps, for querySync
+  const wire = ev => JSON.parse(JSON.stringify(ev)); // no cached "verified" flag
   const emit = ev => {
-    for (const s of subs) {
-      const f = s.filter;
-      if (f.kinds && !f.kinds.includes(ev.kind)) continue;
-      if (f.authors && !f.authors.includes(ev.pubkey)) continue;
-      if (f['#e'] && !ev.tags.some(t => t[0] === 'e' && f['#e'].includes(t[1])))
-        continue;
-      if (f['#p'] && !ev.tags.some(t => t[0] === 'p' && f['#p'].includes(t[1])))
-        continue;
-      s.onevent(JSON.parse(JSON.stringify(ev))); // like the wire: no cached "verified" flag
-    }
+    stored.push(ev);
+    for (const s of subs) if (matches(s.filter, ev)) s.onevent(wire(ev));
   };
 
   const respond = (req, body, signer = sk) =>
@@ -114,6 +114,9 @@ export function createFakeWallet({ encryption = 'nip44_v2' } = {}) {
 
   const pool = {
     published: [],
+    querySync: async (relays, filter) =>
+      stored.filter(ev => matches(filter, ev)).map(wire),
+    subscriptions: () => subs.size,
     subscribe(relays, filter, { onevent }) {
       const s = { filter, onevent };
       subs.add(s);

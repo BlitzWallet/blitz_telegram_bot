@@ -53,7 +53,10 @@
     "approved_but_inflight": "Blitz a approuvé la connexion, mais un paiement est encore en cours de confirmation, donc je n'ai pas basculé. Supprime la nouvelle connexion dans $t(paths.both) et réessaie /connect plus tard.",
     "relay_unsupported": "Ton wallet a demandé un relais que ce bot ne prend pas en charge, donc je ne me suis pas connecté. Supprime la nouvelle connexion dans $t(paths.both).",
     "expired": "Le lien de connexion a expiré. Envoie /connect pour un nouveau lien.",
-    "no_budget_warning": "⚠️ Aucune limite de dépense n'a été configurée pour cette connexion : si tu autorises l'envoi, Blitz la traitera comme illimitée. Définis un budget quotidien dans Blitz si tu en veux un."
+    "no_budget_warning": "⚠️ Aucune limite de dépense n'a été configurée pour cette connexion : si tu autorises l'envoi, Blitz la traitera comme illimitée. Définis un budget quotidien dans Blitz si tu en veux un.",
+    "check_button": "Je l’ai approuvé",
+    "check_hint": "Approuvé dans Blitz mais pas de réponse ici ? Appuie sur « Je l’ai approuvé ».",
+    "not_yet": "Blitz n’a pas encore approuvé ce lien. Approuve-le dans Blitz, puis appuie de nouveau sur « Je l’ai approuvé »."
   },
   "pin": {
     "expired": "Ce clavier a expiré.",

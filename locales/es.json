@@ -53,7 +53,10 @@
     "approved_but_inflight": "Blitz aprobó la conexión, pero aún se está confirmando un pago, así que no cambié. Elimina la nueva conexión en $t(paths.both) e intenta /connect de nuevo más tarde.",
     "relay_unsupported": "Tu wallet pidió usar un relay que este bot no admite, así que no conecté. Elimina la nueva conexión en $t(paths.both).",
     "expired": "El enlace de conexión caducó. Envía /connect para uno nuevo.",
-    "no_budget_warning": "⚠️ No se configuró un límite de gasto para esta conexión: si permites enviar, Blitz la tratará como ilimitada. Configura un presupuesto diario en Blitz si quieres uno."
+    "no_budget_warning": "⚠️ No se configuró un límite de gasto para esta conexión: si permites enviar, Blitz la tratará como ilimitada. Configura un presupuesto diario en Blitz si quieres uno.",
+    "check_button": "Ya lo aprobé",
+    "check_hint": "¿Lo aprobaste en Blitz pero no hay respuesta aquí? Toca «Ya lo aprobé».",
+    "not_yet": "Blitz todavía no ha aprobado este enlace. Apruébalo en Blitz y luego vuelve a tocar «Ya lo aprobé»."
   },
   "pin": {
     "expired": "Este teclado ha caducado.",

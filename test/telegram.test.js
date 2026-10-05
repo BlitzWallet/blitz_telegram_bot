@@ -59,3 +59,20 @@ test('telegram: polling advances the offset, delivers each update once, stops on
   assert.deepEqual(seen, [5, 6, 7]);
   assert.deepEqual(offsets.slice(0, 3), [0, 7, 8]);
 });
+
+test('telegram: 429 waits retry_after and retries instead of dropping (M6)', async () => {
+  let n = 0;
+  const tg = createTelegram({
+    token: TOKEN,
+    log,
+    fetchImpl: async () => ({
+      status: 200,
+      json: async () =>
+        ++n === 1
+          ? { ok: false, error_code: 429, description: 'Too Many Requests', parameters: { retry_after: 0.01 } }
+          : { ok: true, result: { message_id: 1 } },
+    }),
+  });
+  assert.deepEqual(await tg.call('sendMessage', {}), { message_id: 1 });
+  assert.equal(n, 2);
+});

@@ -46,8 +46,14 @@ export const LIMITS = {
   pinSessionMs: 5 * MIN,
   retentionMs: 7 * 24 * 60 * MIN,
   maxConcurrentWalletCalls: 100,
+  maxWalletCallsPerUser: 2, // one user's dead wallet can't hold the global slots
   pairingTimeoutMs: 15 * MIN,
-  maxPendingPairings: 1000,
+  // A pending link is a small record in memory; only the first
+  // maxLivePairings also hold a relay subscription. The rest are confirmed
+  // with the "I've approved it" button, so a flood of links can delay the
+  // automatic notice but can never block pairing (M6).
+  maxPendingPairings: 100_000,
+  maxLivePairings: 1000,
 };
 
 const PAIRING_URL = 'https://blitzwallet.app/nwc/auth';
@@ -179,10 +185,23 @@ const fmtDuration = (ms, locale = 'en') => {
 // Few guesses are allowed before sending is turned off, so reject what an
 // attacker would try first: repeats, sequences, keypad patterns and dates.
 const COMMON_PINS = new Set([
-  '147258', '258369', '369258', '147852', '159753', '753951', '789456',
-  '456789', '102030', '010203', '000123', '123000', '520520', '131420',
+  '147258',
+  '258369',
+  '369258',
+  '147852',
+  '159753',
+  '753951',
+  '789456',
+  '456789',
+  '102030',
+  '010203',
+  '000123',
+  '123000',
+  '520520',
+  '131420',
 ]);
-const isDate = (day, month) => day >= 1 && day <= 31 && month >= 1 && month <= 12;
+const isDate = (day, month) =>
+  day >= 1 && day <= 31 && month >= 1 && month <= 12;
 export const isWeakPin = pin => {
   const [a, b, c] = [0, 2, 4].map(i => Number(pin.slice(i, i + 2)));
   return (
@@ -204,7 +223,13 @@ export const isWeakPin = pin => {
 function bucket(capacity, perMinute) {
   return { capacity, refillPerMs: perMinute / MIN };
 }
-const RATE = { update: bucket(40, 30), wallet: bucket(4, 8) };
+const RATE = {
+  update: bucket(40, 30),
+  wallet: bucket(4, 8),
+  pairing: bucket(3, 0.1), // 6 links/hour, so throwaway accounts churn slowly
+};
+// Unanswered checks back off up to 6 h.
+const backoff = checks => Math.min(6 * 60 * MIN, MIN * 2 ** checks);
 
 // Per-user text: HELP/PASTE_HOWTO depend on the user's language.
 const helpFor = lng => tFor(lng)('help');
@@ -224,8 +249,11 @@ export function createBot({
   const pinSessions = new Map(); // userId -> keypad session (digits never persisted)
   const buckets = new Map();
   const submitting = new Set(); // payment ids owned by a live submit call
-  const pairings = new Map(); // userId -> AbortController of the pending link
+  // userId -> { abort, secret, clientPubkey, state, relays, expiresAt }
+  const pairings = new Map();
+  let livePairings = 0;
   let walletCalls = 0;
+  const userWalletCalls = new Map(); // userId -> in-flight wallet calls
   let maintenanceRunning = false;
 
   const track = promise => {
@@ -268,7 +296,17 @@ export function createBot({
     buckets.set(key, b);
     if (b.tokens < 1) return false;
     b.tokens -= 1;
+    b.warned = false;
     return true;
+  }
+  // One "slow down" per throttled burst. Replying to every throttled message
+  // would let a few flooding accounts spend Telegram's global send quota that
+  // payment notifications need (M6).
+  function slowDown(userId, kind, reply) {
+    const b = buckets.get(`${kind}:${userId}`);
+    if (b.warned) return;
+    b.warned = true;
+    return reply();
   }
 
   // --- language ------------------------------------------------------------
@@ -364,21 +402,39 @@ export function createBot({
 
   // Every wallet round trip goes through here: global concurrency cap, and the
   // request carries an expiration so a delayed delivery is ignored by the wallet.
-  async function walletCall(conn, method, params) {
-    if (walletCalls >= LIMITS.maxConcurrentWalletCalls) return { busy: true };
+  async function withWalletSlot(userId, fn) {
+    const mine = userWalletCalls.get(userId) ?? 0;
+    if (
+      walletCalls >= LIMITS.maxConcurrentWalletCalls ||
+      mine >= LIMITS.maxWalletCallsPerUser
+    )
+      return { busy: true };
     walletCalls++;
+    userWalletCalls.set(userId, mine + 1);
     try {
-      return await nwc.call(conn, method, params, {
-        timeoutMs: LIMITS.readTimeoutMs,
-        expiresInSec: LIMITS.readExpiresInSec,
-      });
-    } catch (err) {
-      if (err instanceof NwcTimeoutError) return { timeout: true };
-      throw err;
+      return await fn();
     } finally {
       walletCalls--;
+      const left = userWalletCalls.get(userId) - 1;
+      if (left) userWalletCalls.set(userId, left);
+      else userWalletCalls.delete(userId);
     }
   }
+
+  const walletCall = (userId, conn, method, params) =>
+    withWalletSlot(userId, () =>
+      nwc
+        .call(conn, method, params, {
+          timeoutMs: LIMITS.readTimeoutMs,
+          expiresInSec: LIMITS.readExpiresInSec,
+        })
+        .catch(err => {
+          if (err instanceof NwcTimeoutError) return { timeout: true };
+          throw err;
+        }),
+    );
+  const callWallet = (wallet, method, params) =>
+    walletCall(wallet.user_id, connFor(wallet), method, params);
 
   const walletTrouble = (r, t = tFor('en')) =>
     r.busy
@@ -462,7 +518,10 @@ export function createBot({
       await safe(tg.call('leaveChat', { chat_id: msg.chat.id }));
       return;
     }
-    if (!allow(userId, 'update')) return send(userId, t('common.slow_down'));
+    if (!allow(userId, 'update'))
+      return slowDown(userId, 'update', () =>
+        send(userId, t('common.slow_down')),
+      );
     if (config.allowedUsers && !config.allowedUsers.has(userId)) {
       return send(userId, t('common.private'));
     }
@@ -539,21 +598,20 @@ export function createBot({
       cq.data ?? '',
     );
     if (m?.[1] === 'ip') return payPostedInvoice(cq, m[2], answer);
-    if (m?.[1] === 'lg')
-      return setLanguageAndContinue(userId, msg?.message_id, m[2], {
-        thenPair: true,
-      });
-    if (m?.[1] === 'll')
-      return setLanguageAndContinue(userId, msg?.message_id, m[2], {
-        thenPair: false,
-      });
     if (!m || msg?.chat?.type !== 'private' || msg.chat.id !== userId)
       return answer();
     if (config.allowedUsers && !config.allowedUsers.has(userId))
       return answer();
-    if (!allow(userId, 'update')) return answer(t('common.slow_down_short'));
+    if (!allow(userId, 'update'))
+      return slowDown(userId, 'update', () =>
+        answer(t('common.slow_down_short')),
+      );
     const [, action, id, key] = m;
     await answer();
+    if (action === 'lg' || action === 'll')
+      return setLanguageAndContinue(userId, msg.message_id, id, {
+        thenPair: action === 'lg',
+      });
     switch (action) {
       case 'k':
         return keypad(userId, msg.message_id, id, key);
@@ -568,6 +626,8 @@ export function createBot({
         return transactions(userId, Number(id) || 0, msg.message_id);
       case 'sr':
         return refreshStatus(userId);
+      case 'pd':
+        return checkPairing(userId);
       case 'dc':
         return id === 'yes'
           ? disconnect(userId, msg.message_id)
@@ -606,7 +666,7 @@ export function createBot({
     } catch {
       return send(userId, t('connect.relay_unreachable'));
     }
-    const res = await walletCall(conn, 'get_info', {});
+    const res = await walletCall(userId, conn, 'get_info', {});
     if (!res.result)
       return send(
         userId,
@@ -691,10 +751,16 @@ export function createBot({
     if (store.getWallet(userId)) {
       return send(userId, t('connect.already_connected'));
     }
-    pairings.get(userId)?.abort(); // a new link replaces the previous one
-    if (pairings.size >= LIMITS.maxPendingPairings) {
-      return send(userId, t('common.busy'));
-    }
+    if (!allow(userId, 'pairing'))
+      return slowDown(userId, 'pairing', () =>
+        send(userId, t('common.slow_down')),
+      );
+    dropPairing(userId); // a new link replaces the previous one
+    // Full: drop the oldest link rather than refuse everyone. With the
+    // per-user pairing limit, cycling through 100k links takes a large
+    // account farm, far longer than a real user needs to approve (M6).
+    if (pairings.size >= LIMITS.maxPendingPairings)
+      dropPairing(pairings.keys().next().value);
 
     const sk = generateSecretKey();
     const secret = bytesToHex(sk);
@@ -721,8 +787,15 @@ export function createBot({
       .join('&');
     const link = `${PAIRING_URL}?pubkey=${clientPubkey}&${params}`;
 
-    const abort = new AbortController();
-    pairings.set(userId, abort);
+    const entry = {
+      abort: new AbortController(),
+      secret,
+      clientPubkey,
+      state,
+      relays,
+      expiresAt: now() + LIMITS.pairingTimeoutMs,
+    };
+    pairings.set(userId, entry);
     const locale = localeOf(userId);
     const body = config.connectBudgetSats
       ? t('pairing.body_with_budget', {
@@ -742,43 +815,36 @@ export function createBot({
         '',
         t('pairing.link_info', { minutes: LIMITS.pairingTimeoutMs / MIN }),
         '',
+        t('pairing.check_hint'),
+        '',
         t('pairing.manual_hint'),
       ].join('\n'),
       {
         reply_markup: {
-          inline_keyboard: [[{ text: t('pairing.button'), url: link }]],
+          inline_keyboard: [
+            [{ text: t('pairing.button'), url: link }],
+            [{ text: t('pairing.check_button'), callback_data: 'pd:x' }],
+          ],
         },
       },
     );
+    // Over the live limit: no subscription; the button finds the approval.
+    if (livePairings >= LIMITS.maxLivePairings) return;
+    livePairings++;
+    entry.live = true;
 
     // Not tracked for shutdown: a pending link is not work in progress; the
     // completion itself runs on the user's chain, which drain() does wait for.
     nwc
       .waitForPairing(
         { clientPubkey, state, relays },
-        { timeoutMs: LIMITS.pairingTimeoutMs, signal: abort.signal },
+        { timeoutMs: LIMITS.pairingTimeoutMs, signal: entry.abort.signal },
       )
       .then(info =>
-        runForUser(userId, async () => {
-          if (pairings.get(userId) !== abort) return; // superseded meanwhile
-          const tt = tu(userId);
-          if (store.inFlightPaymentCount(userId) > 0) {
-            return send(userId, tt('pairing.approved_but_inflight'));
-          }
-          await saveConnection(
-            userId,
-            {
-              walletPubkey: info.walletPubkey,
-              relays: info.relays,
-              secret,
-              encryption: info.encryption,
-            },
-            info.methods,
-          );
-        }),
+        runForUser(userId, () => completePairing(userId, entry, info)),
       )
       .catch(err => {
-        if (abort.signal.aborted) return; // replaced by a newer link
+        if (entry.abort.signal.aborted) return; // replaced or completed
         const tt = tu(userId);
         if (err instanceof ConnectionStringError) {
           return send(userId, tt('pairing.relay_unsupported'));
@@ -788,7 +854,60 @@ export function createBot({
         }
         log.error('pairing failed', { err, user: log.user(userId) });
       })
-      .finally(() => pairings.get(userId) === abort && pairings.delete(userId));
+      .finally(() => {
+        livePairings--;
+        if (pairings.get(userId) === entry) pairings.delete(userId);
+      });
+  }
+
+  function dropPairing(userId) {
+    pairings.get(userId)?.abort.abort();
+    pairings.delete(userId);
+  }
+
+  // Runs on the user's chain, from the live subscription or the button.
+  async function completePairing(userId, entry, info) {
+    if (pairings.get(userId) !== entry) return; // superseded meanwhile
+    dropPairing(userId);
+    const t = tu(userId);
+    if (store.inFlightPaymentCount(userId) > 0) {
+      return send(userId, t('pairing.approved_but_inflight'));
+    }
+    await saveConnection(
+      userId,
+      {
+        walletPubkey: info.walletPubkey,
+        relays: info.relays,
+        secret: entry.secret,
+        encryption: info.encryption,
+      },
+      info.methods,
+    );
+  }
+
+  // "I've approved it": looks the approval up once instead of relying on a
+  // live subscription.
+  async function checkPairing(userId) {
+    const t = tu(userId);
+    if (store.getWallet(userId))
+      return send(userId, t('connect.already_connected'));
+    const entry = pairings.get(userId);
+    if (!entry || entry.expiresAt <= now()) {
+      if (entry) dropPairing(userId);
+      return send(userId, t('pairing.expired'));
+    }
+    if (!allow(userId, 'wallet')) return send(userId, t('common.slow_down'));
+    let info;
+    try {
+      info = await withWalletSlot(userId, () => nwc.findPairing(entry));
+    } catch (err) {
+      if (!(err instanceof ConnectionStringError)) throw err;
+      dropPairing(userId);
+      return send(userId, t('pairing.relay_unsupported'));
+    }
+    if (info?.busy) return send(userId, t('wallet.trouble_busy'));
+    if (!info) return send(userId, t('pairing.not_yet'));
+    return completePairing(userId, entry, info);
   }
 
   // --------------------------------------------------------------- PIN pad
@@ -1062,7 +1181,10 @@ export function createBot({
     }
     let pinOk;
     try {
-      pinOk = await verifyPin(pin, keyring.decrypt(wallet.pin_hash, pinAad(wallet)));
+      pinOk = await verifyPin(
+        pin,
+        keyring.decrypt(wallet.pin_hash, pinAad(wallet)),
+      );
     } catch (err) {
       log.error('cannot decrypt pin hash', { user: log.user(userId), err });
       pinSessions.delete(userId);
@@ -1195,9 +1317,7 @@ export function createBot({
       store.updatePayment(payment.id, {
         status: 'unknown',
         checks,
-        nextCheckAt: givingUp
-          ? null
-          : nowMs + Math.min(6 * 60 * MIN, MIN * 2 ** checks),
+        nextCheckAt: givingUp ? null : nowMs + backoff(checks),
         now: nowMs,
       });
       if (firstAttempt) {
@@ -1264,9 +1384,17 @@ export function createBot({
     if (submitting.has(payment.id)) return;
     const wallet = store.getWallet(payment.user_id);
     if (!wallet) return;
-    const res = await walletCall(connFor(wallet), 'lookup_invoice', {
+    const res = await callWallet(wallet, 'lookup_invoice', {
       payment_hash: payment.payment_hash,
     });
+    // Busy: the wallet was never asked; check again soon without backing off.
+    if (res.busy)
+      return store.updatePayment(payment.id, {
+        status: 'unknown',
+        checks: payment.checks,
+        nextCheckAt: now() + MIN,
+        now: now(),
+      });
     applyPaymentOutcome(
       payment,
       classifyPaymentLookup(res, payment, now()),
@@ -1325,7 +1453,7 @@ export function createBot({
       return { error: t('common.slow_down') };
     }
 
-    const res = await walletCall(connFor(wallet), 'make_invoice', {
+    const res = await callWallet(wallet, 'make_invoice', {
       amount: amount * 1000,
       ...(memo ? { description: memo } : {}),
       expiry: LIMITS.invoiceExpirySec,
@@ -1556,7 +1684,10 @@ export function createBot({
     if (config.allowedUsers && !config.allowedUsers.has(userId)) {
       return answer(t('common.private'));
     }
-    if (!allow(userId, 'update')) return answer(t('common.slow_down_short'));
+    if (!allow(userId, 'update'))
+      return slowDown(userId, 'update', () =>
+        answer(t('common.slow_down_short')),
+      );
     const inv = store.getPostedInvoice(id);
     if (!inv) return answer(t('chatpay.gone'));
     if (inv.user_id === userId) return answer(t('chatpay.own'));
@@ -1584,9 +1715,20 @@ export function createBot({
     const wallet = store.getWallet(inv.user_id);
     if (!wallet) return null;
     const nowMs = now();
-    const res = await walletCall(connFor(wallet), 'lookup_invoice', {
+    const res = await callWallet(wallet, 'lookup_invoice', {
       payment_hash: inv.payment_hash,
     });
+    // Busy: the wallet was never asked, so this says nothing about expiry.
+    if (res.busy) {
+      if (!manual)
+        store.updateInvoice(inv.id, {
+          status: 'open',
+          checks: inv.checks,
+          nextCheckAt: nowMs + MIN,
+          now: nowMs,
+        });
+      return null;
+    }
     const r = res.result;
     let status = null;
     if (
@@ -1674,7 +1816,7 @@ export function createBot({
     if (!methodsOf(wallet).has('get_balance'))
       return send(userId, t('balance.not_enabled'));
     if (!allow(userId, 'wallet')) return send(userId, t('common.slow_down'));
-    const res = await walletCall(connFor(wallet), 'get_balance', {});
+    const res = await callWallet(wallet, 'get_balance', {});
     const msat = Number(res.result?.balance);
     if (!res.result || !Number.isFinite(msat) || msat < 0)
       return send(userId, walletTrouble(res, t));
@@ -1695,7 +1837,7 @@ export function createBot({
       return send(userId, t('transactions.not_enabled'));
     page = Math.min(Math.max(0, Math.floor(page)), LIMITS.txMaxPages - 1);
     if (!allow(userId, 'wallet')) return send(userId, t('common.slow_down'));
-    const res = await walletCall(connFor(wallet), 'list_transactions', {
+    const res = await callWallet(wallet, 'list_transactions', {
       limit: LIMITS.txPageSize,
       offset: page * LIMITS.txPageSize,
     });
@@ -1837,12 +1979,32 @@ export function createBot({
     const t = tu(userId);
     store.deleteUser(userId);
     pinSessions.delete(userId);
-    pairings.get(userId)?.abort();
+    dropPairing(userId);
     log.info('wallet disconnected', { user: log.user(userId) });
     return edit(userId, messageId, t('disconnect.done'));
   }
 
   // ------------------------------------------------------------ maintenance
+
+  // A row whose check throws (e.g. its key was rotated away or its relay was
+  // removed from ALLOWED_RELAYS) is logged and pushed back with backoff.
+  // Otherwise it stays due, and ten such rows would fill every batch and stop
+  // status checks for every user (M5).
+  async function checkRow(kind, row, check, retryLater) {
+    try {
+      await check(row);
+    } catch (err) {
+      log.error(`${kind} status check failed`, {
+        err,
+        user: log.user(row.user_id),
+      });
+      try {
+        retryLater();
+      } catch (err) {
+        log.error(`${kind} reschedule failed`, { err });
+      }
+    }
+  }
 
   // Runs every ~30 s: expires confirmations, reconciles unknown payments and
   // open invoices with backoff, purges old rows, trims in-memory state.
@@ -1852,15 +2014,32 @@ export function createBot({
     try {
       const nowMs = now();
       store.expireConfirmations(nowMs);
-      await Promise.allSettled(
-        store.duePayments(nowMs, 10).map(reconcilePayment),
+      await Promise.all(
+        store
+          .duePayments(nowMs, 10)
+          .map(p =>
+            checkRow('payment', p, reconcilePayment, () =>
+              applyPaymentOutcome(p, { status: 'unknown' }, false),
+            ),
+          ),
       );
-      await Promise.allSettled(
-        store.dueInvoices(nowMs, 10).map(inv => reconcileInvoice(inv)),
+      await Promise.all(
+        store.dueInvoices(nowMs, 10).map(inv =>
+          checkRow('invoice', inv, reconcileInvoice, () =>
+            store.updateInvoice(inv.id, {
+              status: 'open',
+              checks: inv.checks + 1,
+              nextCheckAt: now() + backoff(inv.checks + 1),
+              now: now(),
+            }),
+          ),
+        ),
       );
       store.purge(nowMs, LIMITS.retentionMs);
       for (const [userId, s] of pinSessions)
         if (s.expiresAt < nowMs) pinSessions.delete(userId);
+      for (const [userId, p] of pairings)
+        if (!p.live && p.expiresAt <= nowMs) dropPairing(userId); // live: own timer
       for (const [key, b] of buckets)
         if (nowMs - b.at > 10 * MIN) buckets.delete(key);
     } catch (err) {

@@ -53,7 +53,10 @@
     "approved_but_inflight": "Blitz godkände anslutningen, men en betalning bekräftas fortfarande, så jag bytte inte. Ta bort den nya anslutningen i $t(paths.both) och försök /connect igen senare.",
     "relay_unsupported": "Din wallet bad om en relay som boten inte stöder, så jag anslöt inte. Ta bort den nya anslutningen i $t(paths.both).",
     "expired": "Anslutningslänken har gått ut. Skicka /connect för en ny länk.",
-    "no_budget_warning": "⚠️ Ingen utgiftsgräns har konfigurerats för den här anslutningen: om du tillåter sändning behandlar Blitz den som obegränsad. Ställ in en daglig budget i Blitz om du vill ha en."
+    "no_budget_warning": "⚠️ Ingen utgiftsgräns har konfigurerats för den här anslutningen: om du tillåter sändning behandlar Blitz den som obegränsad. Ställ in en daglig budget i Blitz om du vill ha en.",
+    "check_button": "Jag har godkänt",
+    "check_hint": "Godkänt i Blitz men inget svar här? Tryck på ”Jag har godkänt”.",
+    "not_yet": "Blitz har inte godkänt den här länken än. Godkänn den i Blitz och tryck sedan på ”Jag har godkänt” igen."
   },
   "pin": {
     "expired": "Knappsatsen har gått ut.",
