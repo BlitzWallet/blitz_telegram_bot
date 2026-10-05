@@ -352,9 +352,18 @@ export function createHarness({
       for (const d of pin)
         await h.press(userId, `k:${nonce}:${d}`, b.messageId);
     },
-    async connect(userId, pin = '482913') {
-      await h.say(userId, wallet.connectionString);
-      if (pin) {
+    // Connects the way real users do: /connect, pick English, then Blitz
+    // approves the pairing link. `overrides` is passed to approvePairing.
+    async connect(userId, pin = '482913', overrides = {}, lang = 'en') {
+      await h.say(userId, '/connect');
+      await h.pressButton(userId, `lg:${lang}`);
+      const url = tg.calls
+        .flatMap(c => c.params.reply_markup?.inline_keyboard?.flat() ?? [])
+        .findLast(b => b.url)?.url;
+      wallet.approvePairing(url, overrides);
+      await new Promise(r => setTimeout(r, 20));
+      await h.settle();
+      if (pin && tg.button('k:')) {
         await h.enterPin(userId, pin);
         await h.enterPin(userId, pin);
       }

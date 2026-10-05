@@ -110,7 +110,7 @@ retention, backups, notification previews, already-synced devices).
 
 | Option | Secret ever in Telegram? | Cost | Verdict |
 |---|---|---|---|
-| A. Paste connection string in chat | Yes (deleted immediately, best-effort) | none | Kept only as `/connect_manual` for Blitz versions without D, with the mitigations below |
+| A. Paste connection string in chat | Yes (deleted immediately, best-effort) | none | Removed: the bot never connects from a pasted string; it only deletes it and warns |
 | B. One-time HTTPS pairing page | No (clipboard → HTTPS form) | public HTTPS server, TLS/domain, CSRF, link tokens; bot otherwise needs zero inbound ports | Rejected: moves the same pasted secret over another channel at the cost of a new internet-facing attack surface |
 | C. Telegram Mini App + client-side encryption | Ciphertext only | static hosting + page-integrity trust | Rejected for v1: same user paste, extra moving parts |
 | D. **NWC-08 client-initiated pairing** (`nostr+walletauth://`) | **Never** — bot generates the key, only public keys are exchanged | Blitz app support (now implemented) | **Default `/connect` flow** — see §18 |
@@ -119,8 +119,8 @@ The marginal risk of option A over the unavoidable risk is narrower than it
 looks: anyone who controls the user's Telegram account can already drive the
 bot. What A adds is (1) the secret could be used *outside* the bot (bypassing
 confirmation/PIN), and (2) Telegram-side retention. Option D removes both, so
-it is the default; the paste flow survives only for older Blitz versions, with
-these mitigations:
+it is the only way to connect (the paste flow was removed). A string pasted
+anyway is still deleted on sight and flagged. The old paste mitigations:
 
 1. The bot deletes any message containing a connection string **before**
    processing it, in any chat; strings seen in a group are refused and the user
@@ -369,10 +369,6 @@ everything); (4) bot process ↔ its DB/key/env (DB alone is not enough; DB + ke
   "Connect in Blitz" link → user approves in Blitz → Blitz publishes signed
   info event (`p` = bot key, `state`) → bot verifies, encrypts + upserts →
   PIN setup if `pay_invoice` granted. Details in §18.
-- *Connect (manual, older Blitz)*: user pastes string → bot deletes message →
-  parse + relay allowlist → fetch info event (encryption) → `get_info` round
-  trip proves the secret works and yields granted methods → encrypt + upsert →
-  ask user to set PIN (keypad, twice) if `pay_invoice` granted.
 - *Receive*: `/receive` → `make_invoice` → validate → store hash → show invoice
   + Check button → scheduled `lookup_invoice` → notify on paid.
 - *Send*: paste invoice / `/send` → validate → `awaiting_confirmation` →
@@ -402,9 +398,9 @@ everything); (4) bot process ↔ its DB/key/env (DB alone is not enough; DB + ke
 ## 14. Commands (Telegram UX)
 
 `/start` welcome + status · `/connect` pairing link (NWC-08) ·
-`/connect_manual` paste instructions for older Blitz · `/balance` ·
+`/balance` ·
 `/receive <sats> [memo]` · `/send` (or just paste an invoice) ·
-`/transactions` · `/status` · `/disconnect` · `/help`.
+`/transactions` · `/status` · `/reconnect` · `/disconnect` · `/help`.
 User-facing language avoids NWC jargon ("Wallet Connect", "connection",
 "connection string" — the terms the Blitz app uses).
 

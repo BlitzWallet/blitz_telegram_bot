@@ -51,14 +51,45 @@ const payRequests = w => w.requests.filter(r => r.method === 'pay_invoice');
 
 // -------------------------------------------------------------- authorization
 
+const sentTexts = h =>
+  h.tg.calls.filter(c => c.method === 'sendMessage').map(c => c.params.text);
+
+test('start/help: intro only on /start, command list only on /help', async () => {
+  const h = createHarness();
+  await h.say(ALICE, '/help');
+  assert.equal(sentTexts(h).length, 1);
+  assert.match(h.tg.lastText(), /What can I do\?/);
+  assert.doesNotMatch(h.tg.lastText(), /Stay safe/);
+
+  // New user: intro with a Connect button that runs the /connect flow.
+  const n = createHarness();
+  await n.say(ALICE, '/start');
+  assert.equal(sentTexts(n).length, 1);
+  assert.match(sentTexts(n)[0], /Stay safe/);
+  assert.ok(n.tg.button('cn:go'), 'intro has a Connect button');
+  await n.pressButton(ALICE, 'cn:go');
+  assert.match(n.tg.lastText(), /Pick your language/);
+  await n.pressButton(ALICE, 'lg:en');
+  assert.ok(findUrlButton(n), 'button leads into pairing');
+
+  // Connected user: intro only, nothing else.
+  const c = createHarness();
+  await c.connect(ALICE);
+  const before = sentTexts(c).length;
+  await c.say(ALICE, '/start');
+  assert.equal(sentTexts(c).length, before + 1);
+  assert.match(c.tg.lastText(), /Stay safe/);
+  assert.equal(c.tg.button('cn:go'), null, 'no Connect button once connected');
+});
+
 test('auth: unconnected user is told to connect; allowlist blocks unknown users', async () => {
   const h = createHarness();
   await h.say(ALICE, '/balance');
-  assert.match(h.tg.lastText(), /Connect your wallet first/);
+  assert.match(h.tg.lastText(), /First, connect your Blitz app/);
 
   const p = createHarness({ config: { allowedUsers: new Set([ALICE]) } });
   await p.say(BOB, '/balance');
-  assert.equal(p.tg.lastText(), 'This bot is private.');
+  assert.equal(p.tg.lastText(), 'Sorry, this bot is private.');
   await p.say(BOB, p.wallet.connectionString);
   assert.ok(
     p.tg.calls.some(c => c.method === 'deleteMessage'),
@@ -73,7 +104,7 @@ test('auth: groups are refused, connection strings there are deleted and flagged
   await h.say(ALICE, h.wallet.connectionString, group);
   const methods = h.tg.calls.map(c => c.method);
   assert.deepEqual(methods, ['deleteMessage', 'sendMessage', 'leaveChat']);
-  assert.match(h.tg.calls[1].params.text, /treat it as exposed/);
+  assert.match(h.tg.calls[1].params.text, /may have seen it/);
   assert.equal(h.store.getWallet(ALICE), undefined);
   await h.say(ALICE, '/balance', group);
   assert.equal(h.wallet.requests.length, 0);
@@ -88,21 +119,14 @@ test('auth: callbacks from another chat or with malformed data are ignored', asy
 
 // ------------------------------------------------------------------- connect
 
-test('connect: stores only an encrypted secret, deletes the message, sets a PIN', async () => {
+test('connect: stores only an encrypted secret and sets a PIN', async () => {
   const h = createHarness();
   await h.connect(ALICE);
-  assert.equal(
-    h.tg.calls[0].method,
-    'deleteMessage',
-    'deleted before anything else',
-  );
   const row = h.store.getWallet(ALICE);
   assert.equal(row.wallet_pubkey, h.wallet.pubkey);
-  assert.ok(!row.secret_enc.includes(h.wallet.clientSecret));
-  assert.equal(
-    h.keyring.decrypt(row.secret_enc, `${ALICE}:${h.wallet.pubkey}`),
-    h.wallet.clientSecret,
-  );
+  const secret = h.keyring.decrypt(row.secret_enc, `${ALICE}:${h.wallet.pubkey}`);
+  assert.match(secret, /^[0-9a-f]{64}$/);
+  assert.ok(!row.secret_enc.includes(secret));
   // Encrypted with the server key: a leaked database cannot be cracked alone.
   assert.ok(row.pin_hash?.startsWith('v1.'));
   assert.ok(
@@ -110,37 +134,28 @@ test('connect: stores only an encrypted secret, deletes the message, sets a PIN'
       .decrypt(row.pin_hash, `pin:${ALICE}:${h.wallet.pubkey}`)
       .startsWith('scrypt.'),
   );
-  assert.match(h.tg.lastText(), /PIN set/);
-  assert.equal(h.wallet.requests[0].method, 'get_info');
+  assert.match(h.tg.lastText(), /🔐 PIN saved/);
 });
 
-test('connect: invalid string, unreachable/revoked wallet and rejected connection are not stored', async () => {
+test('connect: a pasted connection string is deleted, never used, and flagged', async () => {
   const h = createHarness();
-  await h.say(ALICE, 'nostr+walletconnect://nothex?relay=x&secret=y');
-  assert.match(h.tg.lastText(), /doesn’t look like a valid/);
-
-  h.wallet.revoke(); // Blitz silently drops events from removed connections
   await h.say(ALICE, h.wallet.connectionString);
-  assert.match(h.tg.lastText(), /Not connected\. Your wallet didn’t respond/);
+  assert.equal(h.tg.calls[0].method, 'deleteMessage', 'deleted first');
+  assert.match(h.tg.lastText(), /can't connect with a pasted code/);
   assert.equal(h.store.getWallet(ALICE), undefined);
-
-  const u = createHarness();
-  u.wallet.handlers.get_info = () => ({
-    error: { code: 'UNAUTHORIZED', message: 'no' },
-  });
-  await u.say(ALICE, u.wallet.connectionString);
-  assert.match(u.tg.lastText(), /refused/);
-  assert.equal(u.store.getWallet(ALICE), undefined);
+  assert.equal(h.wallet.requests.length, 0);
+  await h.say(ALICE, '/connect_manual');
+  assert.match(h.tg.lastText(), /don't know that one/);
 });
 
 test('connect: weak and mismatched PINs are rejected', async () => {
   const h = createHarness();
-  await h.say(ALICE, h.wallet.connectionString);
+  await h.connect(ALICE, null);
   await h.enterPin(ALICE, '111111');
-  assert.match(h.tg.lastText(), /too easy/);
+  assert.match(h.tg.lastText(), /too easy to guess/);
   await h.enterPin(ALICE, '482913');
   await h.enterPin(ALICE, '482914');
-  assert.match(h.tg.lastText(), /didn’t match/);
+  assert.match(h.tg.lastText(), /didn't match/);
   assert.equal(h.store.getWallet(ALICE).pin_hash, null);
 });
 
@@ -148,22 +163,24 @@ test('connect: without a PIN, sending stays off until re-pairing', async () => {
   const h = createHarness({ wallet: payingWallet() });
   await h.connect(ALICE, null);
   await h.enterPin(ALICE, 'x'); // cancel the setup keypad
-  assert.match(h.tg.lastText(), /Sending stays off/);
+  assert.match(h.tg.lastText(), /Paying stays off/);
   await h.say(ALICE, newInvoice(h.wallet).invoice);
-  assert.match(h.tg.lastText(), /Sending is off/);
+  assert.match(h.tg.lastText(), /Paying is off/);
   assert.ok(!h.tg.button('pc:'), 'no confirmation');
   assert.equal(payRequests(h.wallet).length, 0);
 });
 
 test('connect: receive-only connection disables sending', async () => {
   const h = createHarness();
-  h.wallet.handlers.get_info = () => ({
-    result: { methods: ['get_balance', 'make_invoice', 'lookup_invoice'] },
+  await h.connect(ALICE, null, {
+    methods: ['get_balance', 'make_invoice', 'lookup_invoice'],
   });
-  await h.say(ALICE, h.wallet.connectionString);
   assert.ok(!h.tg.button('k:'), 'no PIN prompt without pay_invoice');
+  assert.match(h.tg.lastText(), /You're connected![\s\S]*• See your balance\n• Ask others for money/);
+  assert.doesNotMatch(h.tg.lastText(), /Pay people/);
+  assert.match(h.tg.lastText(), /switched off/);
   await h.say(ALICE, newInvoice(h.wallet).invoice);
-  assert.match(h.tg.lastText(), /Sending isn’t enabled/);
+  assert.match(h.tg.lastText(), /Paying is off/);
 });
 
 test('disconnect deletes everything; reconnect works and resets the PIN', async () => {
@@ -174,9 +191,9 @@ test('disconnect deletes everything; reconnect works and resets the PIN', async 
   await h.pressButton(ALICE, 'dc:yes');
   assert.equal(h.store.getWallet(ALICE), undefined);
   assert.equal(h.store.recentPayments(ALICE).length, 0);
-  assert.match(h.tg.lastText(), /delete the Telegram connection/);
+  assert.match(h.tg.lastText(), /Also delete the Telegram connection/);
   await h.say(ALICE, '/balance');
-  assert.match(h.tg.lastText(), /Connect your wallet first/);
+  assert.match(h.tg.lastText(), /First, connect your Blitz app/);
 
   await h.connect(ALICE, '135790');
   assert.ok(h.store.getWallet(ALICE).pin_hash);
@@ -195,17 +212,17 @@ test('isolation: a user cannot confirm, cancel or check another user’s items',
     id: BOB,
     type: 'private',
   });
-  assert.match(h.tg.lastText(), /expired or was already handled/);
+  assert.match(h.tg.lastText(), /took too long/);
   await h.press(BOB, `px:${paymentId}`);
   assert.equal(
     h.store.getPayment(paymentId, ALICE).status,
     'awaiting_confirmation',
   );
   await h.press(BOB, `ic:${paymentId}`);
-  assert.match(h.tg.lastText(), /no longer tracking/);
+  assert.match(h.tg.lastText(), /not watching that one anymore/);
   // Bob's commands never use Alice's connection.
   await h.say(BOB, '/balance');
-  assert.match(h.tg.lastText(), /Connect your wallet first/);
+  assert.match(h.tg.lastText(), /First, connect your Blitz app/);
   assert.equal(payRequests(h.wallet).length, 0);
 });
 
@@ -234,14 +251,14 @@ test('payment: confirm + PIN pays once and reports success', async () => {
   await h.say(ALICE, invoice);
   assert.match(
     h.tg.lastText(),
-    /You’re about to pay[\s\S]*21,000 sats[\s\S]*written by the recipient/,
+    /Pay now\?[\s\S]*21,000 sats[\s\S]*Their note/,
   );
   await h.pressButton(ALICE, 'pc:');
-  assert.match(h.tg.lastText(), /Enter your PIN/);
+  assert.match(h.tg.lastText(), /Type your PIN to pay/);
   await h.enterPin(ALICE, PIN);
   await h.settle();
   assert.deepEqual(h.wallet.paid, [paymentHash]);
-  assert.match(h.tg.lastText(), /✅ Paid <b>21,000 sats<\/b> \(fee 2 sats\)/);
+  assert.match(h.tg.lastText(), /✅ Paid <b>21,000 sats<\/b> \(fee: 2 sats\)/);
   const [p] = h.store.recentPayments(ALICE);
   assert.equal(p.status, 'paid');
   assert.equal(p.invoice, null, 'invoice string dropped once terminal');
@@ -262,14 +279,14 @@ test('payment: invalid, expired, amountless, testnet and over-limit invoices nev
   await h.connect(ALICE);
   const { paymentHash } = newPreimage();
   const cases = [
-    ['lnbc1qqqqqqqqqqqqqqqqqqqqqqqqqq', /valid Lightning invoice/],
+    ['lnbc1qqqqqqqqqqqqqqqqqqqqqqqqqq', /payment request/],
     [
       makeInvoice({ sats: 10, paymentHash, timestamp: 1_000_000, expiry: 60 }),
       /expired/,
     ],
-    [makeInvoice({ sats: null, paymentHash }), /no amount/],
-    [makeInvoice({ sats: 10, paymentHash, prefix: 'lntb' }), /mainnet/],
-    [makeInvoice({ sats: 60_000, paymentHash }), /more than this bot allows/],
+    [makeInvoice({ sats: null, paymentHash }), /has no amount/],
+    [makeInvoice({ sats: 10, paymentHash, prefix: 'lntb' }), /isn't for real bitcoin/],
+    [makeInvoice({ sats: 60_000, paymentHash }), /too much for one payment/],
   ];
   for (const [text, expected] of cases) {
     await h.say(ALICE, text);
@@ -295,14 +312,14 @@ test('payment: cancel sends nothing; confirmation expires', async () => {
   await h.connect(ALICE);
   await h.say(ALICE, newInvoice(h.wallet).invoice);
   await h.pressButton(ALICE, 'px:');
-  assert.match(h.tg.lastText(), /cancelled\. Nothing was sent/);
+  assert.match(h.tg.lastText(), /Stopped\. No money was sent/);
   await h.pressButton(ALICE, 'pc:');
-  assert.match(h.tg.lastText(), /expired or was already handled/);
+  assert.match(h.tg.lastText(), /took too long/);
 
   await h.say(ALICE, newInvoice(h.wallet).invoice);
   h.clock.now += LIMITS.confirmTtlMs + 1;
   await h.pressButton(ALICE, 'pc:');
-  assert.match(h.tg.lastText(), /expired/);
+  assert.match(h.tg.lastText(), /took too long/);
   assert.equal(payRequests(h.wallet).length, 0);
 });
 
@@ -312,7 +329,7 @@ test('payment: cancelling from the PIN keypad sends nothing', async () => {
   await h.say(ALICE, newInvoice(h.wallet).invoice);
   await h.pressButton(ALICE, 'pc:');
   await h.enterPin(ALICE, 'x');
-  assert.match(h.tg.lastText(), /Nothing was sent/);
+  assert.match(h.tg.lastText(), /No money was sent/);
   assert.equal(payRequests(h.wallet).length, 0);
 });
 
@@ -325,7 +342,7 @@ test('payment: definitive wallet error is "failed"', async () => {
   await pay(h, ALICE, newInvoice(h.wallet).invoice);
   assert.match(
     h.tg.lastText(),
-    /reports the payment.*failed[\s\S]*exceed the budget[\s\S]*Check Blitz before paying again/,
+    /didn't work[\s\S]*daily limit[\s\S]*Check the Blitz app/,
   );
   assert.equal(h.store.recentPayments(ALICE)[0].status, 'failed');
 });
@@ -340,7 +357,7 @@ test('payment: a failed payment still blocks paying the same invoice again', asy
   await pay(h, ALICE, invoice);
   assert.equal(h.store.recentPayments(ALICE)[0].status, 'failed');
   await h.say(ALICE, invoice);
-  assert.match(h.tg.lastText(), /already in progress.*check \/status/i);
+  assert.match(h.tg.lastText(), /already going/);
   assert.equal(payRequests(h.wallet).length, 1, 'failed invoice is not re-sent');
 });
 
@@ -352,18 +369,18 @@ test('payment: timeout is "unknown", never "failed", and is not retried', async 
   await pay(h, ALICE, invoice);
   assert.match(
     h.tg.lastText(),
-    /couldn’t confirm[\s\S]*Don’t pay this invoice again/,
+    /not sure yet[\s\S]*Don't pay it again/,
   );
   assert.equal(h.store.recentPayments(ALICE)[0].status, 'unknown');
   // Same invoice again is blocked while unknown.
   await h.say(ALICE, invoice);
-  assert.match(h.tg.lastText(), /already in progress/);
+  assert.match(h.tg.lastText(), /already going/);
   // A different invoice is blocked too: one in-flight payment per user.
   await h.say(ALICE, newInvoice(h.wallet).invoice);
   await h.pressButton(ALICE, 'pc:');
   await h.enterPin(ALICE, PIN);
   await h.settle();
-  assert.match(h.tg.lastText(), /Another payment is still in progress/);
+  assert.match(h.tg.lastText(), /Another payment is still going/);
   assert.equal(payRequests(h.wallet).length, 1);
 });
 
@@ -427,7 +444,7 @@ test('payment: NOT_FOUND only means "not sent" after the request expired plus gr
   h.clock.now += LIMITS.notFoundGraceMs + LIMITS.payExpiresInSec * 1000;
   await h.bot.runMaintenance();
   assert.equal(h.store.recentPayments(ALICE)[0].status, 'failed');
-  assert.match(h.tg.lastText(), /never received the request/);
+  assert.match(h.tg.lastText(), /didn't get the payment in time/);
 });
 
 test('payment: duplicate PIN completion / double callbacks submit only once', async () => {
@@ -476,7 +493,7 @@ test('payment: concurrent confirmations allow only one in flight; a newer confir
   const first = h2.tg.button('pc:');
   await h2.say(ALICE, newInvoice(h2.wallet).invoice);
   await h2.press(ALICE, first.data, first.messageId);
-  assert.match(h2.tg.lastText(), /expired or was already handled/);
+  assert.match(h2.tg.lastText(), /took too long/);
 });
 
 test('payment: same invoice cannot be paid twice; even a failed attempt blocks retry', async () => {
@@ -496,7 +513,7 @@ test('payment: same invoice cannot be paid twice; even a failed attempt blocks r
   await h.say(ALICE, f.invoice);
   assert.match(
     h.tg.lastText(),
-    /already in progress/,
+    /already going/,
     'failed attempts stay blocked until expiry: check Blitz, do not re-send',
   );
 });
@@ -569,17 +586,17 @@ test('payment: wrong PINs escalate lockouts, then turn sending off', async () =>
   const expected = ['1 min', '5 min', '15 min', '30 min', '1 hr', '5 hr', '24 hr'];
   for (const [i, lockMs] of LIMITS.pinLocksMs.entries()) {
     await h.enterPin(ALICE, '000001');
-    assert.match(h.tg.lastText(), new RegExp(`locked for ${expected[i]}\\.`));
+    assert.match(h.tg.lastText(), new RegExp(`Locked for ${expected[i]}\\.`));
     await attempt();
     assert.match(h.tg.lastText(), /Try again in/);
     h.clock.now += lockMs;
     await attempt();
   }
   await h.enterPin(ALICE, '000001');
-  assert.match(h.tg.lastText(), /Sending is now off/);
+  assert.match(h.tg.lastText(), /Paying is now off/);
   assert.equal(h.store.getWallet(ALICE).pin_hash, null);
   await h.say(ALICE, newInvoice(h.wallet).invoice);
-  assert.match(h.tg.lastText(), /Sending is off/);
+  assert.match(h.tg.lastText(), /Paying is off/);
   assert.equal(payRequests(h.wallet).length, 0);
 
   // Re-pairing is the only way back.
@@ -613,7 +630,7 @@ test('payment: revoked connection reports a clear, non-failed state', async () =
   await pay(h, ALICE, newInvoice(h.wallet).invoice);
   assert.equal(h.store.recentPayments(ALICE)[0].status, 'unknown');
   await h.say(ALICE, '/balance');
-  assert.match(h.tg.lastText(), /didn’t respond[\s\S]*still exists/);
+  assert.match(h.tg.lastText(), /Blitz didn't answer/);
 });
 
 test('classifiers: pure state mapping', () => {
@@ -686,8 +703,23 @@ test('receive: creates an invoice, tracks it, notifies when paid', async () => {
     [made.amount, made.description, made.expiry],
     [21_000_000, 'coffee <b>', 3600],
   );
-  assert.match(h.tg.sent().at(-2), /21,000 sats<\/b> \(coffee &lt;b&gt;\)/);
-  assert.match(h.tg.lastText(), /^<code>lnbc/);
+  assert.match(
+    h.tg.sent().at(-2),
+    /Asking for.*21,000 sats.*note: coffee &lt;b&gt;/,
+  );
+  assert.equal(h.tg.lastText(), 'Tap Copy, then send it to the person who will pay you.');
+  const copyParams = h.tg.calls
+    .filter(c => c.method === 'sendMessage')
+    .at(-1).params;
+  const copyButtons = copyParams.reply_markup.inline_keyboard.flat();
+  assert.ok(
+    copyButtons.some(b => (b.copy_text?.text ?? b.url ?? '').includes('lnbc')),
+    'invoice lives in the Copy button, not in message text',
+  );
+  assert.ok(
+    !h.tg.sent().some(t => /^<code>lnbc/.test(t)),
+    'invoice is not pasted as text',
+  );
 
   h.wallet.handlers.lookup_invoice = () => ({
     result: { type: 'incoming', state: 'pending' },
@@ -700,7 +732,7 @@ test('receive: creates an invoice, tracks it, notifies when paid', async () => {
   });
   h.clock.now += 61_000;
   await h.bot.runMaintenance();
-  assert.match(h.tg.lastText(), /💰 Received <b>21,000 sats/);
+  assert.match(h.tg.lastText(), /You got <b>21,000 sats/);
   assert.equal(h.store.recentInvoices(ALICE)[0].status, 'paid');
 });
 
@@ -725,7 +757,7 @@ test('receive: invoice expires unpaid; wallet invoice with wrong amount is refus
   });
   h.clock.now = Date.now();
   await h.say(ALICE, '/receive 1000');
-  assert.match(h.tg.lastText(), /different amount/);
+  assert.match(h.tg.lastText(), /Oops/);
 });
 
 test('receive: usage errors and open-invoice cap', async () => {
@@ -738,14 +770,14 @@ test('receive: usage errors and open-invoice cap', async () => {
     '/receive 100000001',
   ]) {
     await h.say(ALICE, bad);
-    assert.match(h.tg.lastText(), /Usage/);
+    assert.match(h.tg.lastText(), /\/receive 21000/);
   }
   for (let i = 0; i < LIMITS.maxOpenInvoices; i++) {
     h.clock.now += 60_000; // stay under the wallet rate limit
     await h.say(ALICE, '/receive 10');
   }
   await h.say(ALICE, '/receive 10');
-  assert.match(h.tg.lastText(), /already have 5 open invoices/);
+  assert.match(h.tg.lastText(), /open requests/);
 });
 
 // ------------------------------------------------------------ balance & history
@@ -756,7 +788,7 @@ test('balance: shows Wallet Connect balance in sats', async () => {
   await h.say(ALICE, '/balance');
   assert.match(
     h.tg.lastText(),
-    /^Wallet Connect balance: <b>21,000 sats<\/b>\nWallet: <code>[0-9a-f]{8}…<\/code>$/,
+    /^You have <b>21,000 sats<\/b>\.$/,
   );
 });
 
@@ -797,7 +829,7 @@ test('transactions: pagination, empty history, no memos shown', async () => {
   });
   await e.connect(ALICE);
   await e.say(ALICE, '/transactions');
-  assert.equal(e.tg.lastText(), 'No transactions yet.');
+  assert.equal(e.tg.lastText(), 'No payments yet.');
 });
 
 // ------------------------------------------------------------------- security
@@ -822,10 +854,7 @@ test('security: unexpected errors give a generic reply', async () => {
     throw new Error(`db exploded ${h.wallet.clientSecret}`);
   };
   await h.say(ALICE, '/balance');
-  assert.equal(
-    h.tg.lastText(),
-    'Something went wrong on my side. Please try again.',
-  );
+  assert.equal(h.tg.lastText(), 'Oops, something went wrong. Please try again.');
   assert.ok(!h.allOutput().includes(h.wallet.clientSecret));
 });
 
@@ -834,14 +863,14 @@ test('security: rate limiting caps wallet requests per user', async () => {
   await h.connect(ALICE);
   h.clock.now += 60_000; // refill after connecting
   for (let i = 0; i < 5; i++) await h.say(ALICE, '/balance');
-  assert.match(h.tg.lastText(), /Slow down/);
+  assert.match(h.tg.lastText(), /Too fast/);
   assert.equal(
     h.wallet.requests.filter(r => r.method === 'get_balance').length,
     4,
   );
   // Other users are unaffected.
   await h.say(BOB, '/balance');
-  assert.match(h.tg.lastText(), /Connect your wallet first/);
+  assert.match(h.tg.lastText(), /First, connect your Blitz app/);
 });
 
 test('security: unknown commands are not executed', async () => {
@@ -850,7 +879,7 @@ test('security: unknown commands are not executed', async () => {
   const before = h.wallet.requests.length;
   await h.say(ALICE, '/pay_everything');
   await h.say(ALICE, 'rm -rf / ; $(curl evil)');
-  assert.match(h.tg.lastText(), /didn’t understand/);
+  assert.match(h.tg.lastText(), /don't know that one/);
   assert.equal(h.wallet.requests.length, before);
 });
 
@@ -900,6 +929,8 @@ test('security: connection strings in edits and captions are deleted; edits neve
 
 // ------------------------------------------------------------- NWC-08 pairing
 
+const urlButtonCount = h =>
+  h.tg.calls.filter(c => JSON.stringify(c.params.reply_markup ?? {}).includes('"url"')).length;
 function findUrlButton(h) {
   for (const c of [...h.tg.calls].reverse()) {
     for (const row of c.params.reply_markup?.inline_keyboard ?? []) {
@@ -915,6 +946,33 @@ async function connectAndPair(h, userId) {
   await h.say(userId, '/connect');
   await h.pressButton(userId, 'lg:en');
 }
+
+test('reconnect: disconnects and sends a new link so new permissions apply', async () => {
+  const h = createHarness();
+  await h.connect(ALICE, null, { methods: ['make_invoice', 'lookup_invoice'] });
+  await h.say(ALICE, '/reconnect');
+  assert.match(h.tg.lastText(), /Connect again\?/);
+  await h.pressButton(ALICE, 'dc:no');
+  assert.match(h.tg.lastText(), /Still connected/);
+  assert.ok(h.store.getWallet(ALICE));
+
+  await h.say(ALICE, '/reconnect');
+  await h.pressButton(ALICE, 'rc:yes');
+  assert.equal(h.store.getWallet(ALICE), undefined);
+  assert.ok(h.tg.sent().some(m => /Also delete the Telegram connection/.test(m)));
+  h.wallet.approvePairing(findUrlButton(h), {
+    methods: ['get_balance', 'make_invoice', 'lookup_invoice'],
+  });
+  await settlePairing(h);
+  await h.say(ALICE, '/balance');
+  assert.match(h.tg.lastText(), /^You have <b>21,000 sats<\/b>\.$/);
+});
+
+test('reconnect: with no wallet it is just /connect', async () => {
+  const h = createHarness();
+  await h.say(ALICE, '/reconnect');
+  assert.ok(h.tg.button('lg:en'), 'language picker of the connect flow');
+});
 
 test('pairing: link carries only public data and the requested limits', async () => {
   const h = createHarness();
@@ -960,14 +1018,14 @@ test('pairing: approval stores the connection; the secret never leaves the bot',
     !h.allOutput().includes(secret),
     'secret leaked to Telegram or logs',
   );
-  assert.match(h.tg.lastText(), /payment PIN/);
+  assert.match(h.tg.lastText(), /6-digit PIN/);
 
   await h.enterPin(ALICE, PIN);
   await h.enterPin(ALICE, PIN);
   await h.say(ALICE, '/balance');
   assert.match(
     h.tg.lastText(),
-    /^Wallet Connect balance: <b>21,000 sats<\/b>\nWallet: <code>[0-9a-f]{8}…<\/code>$/,
+    /^You have <b>21,000 sats<\/b>\.$/,
   );
   assert.equal(h.wallet.requests.at(-1).event.pubkey, appKey);
 });
@@ -1008,7 +1066,7 @@ test('pairing: a relay outside the allowlist is refused', async () => {
   h.wallet.approvePairing(findUrlButton(h), { relays: ['wss://evil.example'] });
   await settlePairing(h);
   assert.equal(h.store.getWallet(ALICE), undefined);
-  assert.match(h.tg.lastText(), /relay this bot doesn’t support/);
+  assert.match(h.tg.lastText(), /won't work with me/);
 });
 
 test('pairing: a newer link replaces the old one; disconnect cancels it', async () => {
@@ -1040,7 +1098,7 @@ test('pairing: link expires', async () => {
     const link = findUrlButton(h);
     await new Promise(r => setTimeout(r, 80));
     await h.settle();
-    assert.match(h.tg.lastText(), /link expired/);
+    assert.match(h.tg.lastText(), /expired/);
     h.wallet.approvePairing(link);
     await settlePairing(h);
     assert.equal(h.store.getWallet(ALICE), undefined);
@@ -1055,9 +1113,10 @@ test('pairing: never switches connections while a payment is unconfirmed', async
   h.wallet.handlers.pay_invoice = () => 'drop';
   await pay(h, ALICE, newInvoice(h.wallet).invoice);
   const before = h.store.getWallet(ALICE).secret_enc;
+  const links = urlButtonCount(h);
   await h.say(ALICE, '/connect');
-  assert.match(h.tg.lastText(), /payment is still being confirmed/);
-  assert.equal(findUrlButton(h), null);
+  assert.match(h.tg.lastText(), /still going through/);
+  assert.equal(urlButtonCount(h), links, 'no new pairing link');
   assert.equal(h.store.getWallet(ALICE).secret_enc, before);
 });
 
@@ -1065,14 +1124,15 @@ test('pairing: an already-connected user cannot silently switch wallets (H3)', a
   const h = createHarness();
   await h.connect(ALICE);
   const before = h.store.getWallet(ALICE);
+  const links = urlButtonCount(h);
   await h.say(ALICE, '/connect');
   await h.pressButton(ALICE, 'lg:en');
-  assert.match(h.tg.lastText(), /already connected[\s\S]*\/disconnect/);
-  assert.equal(findUrlButton(h), null);
+  assert.match(h.tg.lastText(), /already connected[\s\S]*\/reconnect/);
+  assert.equal(urlButtonCount(h), links, 'no new pairing link');
   assert.equal(h.store.getWallet(ALICE).secret_enc, before.secret_enc);
 
   await h.say(ALICE, h.wallet.connectionString);
-  assert.match(h.tg.lastText(), /already connected/);
+  assert.match(h.tg.lastText(), /pasted code/);
   assert.equal(h.store.getWallet(ALICE).secret_enc, before.secret_enc);
 });
 
@@ -1085,23 +1145,16 @@ test('amounts: formatted in the user locale, never US-style for comma-decimal la
 
   const h = createHarness();
   await h.say(ALICE, '/language');
-  await h.pressButton(ALICE, 'll:de-DE');
-  await h.connect(ALICE);
+  await h.connect(ALICE, '482913', {}, 'de-DE');
   await h.say(ALICE, '/balance');
   assert.match(h.tg.lastText(), /21\.000/);
   assert.doesNotMatch(h.tg.lastText(), /21,000/);
 });
 
-test('pairing: the manual paste flow is still available', async () => {
-  const h = createHarness();
-  await h.say(ALICE, '/connect_manual');
-  assert.match(h.tg.lastText(), /Connect manually/);
-});
-
 test('language: /connect asks for language first, then pairs in that language', async () => {
   const h = createHarness();
   await h.say(ALICE, '/connect');
-  assert.match(h.tg.lastText(), /Choose your language/);
+  assert.match(h.tg.lastText(), /Pick your language/);
   assert.equal(findUrlButton(h), null, 'no pairing link before language choice');
   await h.pressButton(ALICE, 'lg:es');
   assert.equal(h.store.getLocale(ALICE), 'es');
@@ -1115,10 +1168,10 @@ test('language: /connect asks for language first, then pairs in that language', 
 test('language: /language switches language without pairing', async () => {
   const h = createHarness();
   await h.say(ALICE, '/language');
-  assert.match(h.tg.lastText(), /Choose your language/);
+  assert.match(h.tg.lastText(), /Pick your language/);
   await h.pressButton(ALICE, 'll:fr');
   assert.equal(h.store.getLocale(ALICE), 'fr');
-  assert.match(h.tg.lastText(), /Langue définie sur/);
+  assert.match(h.tg.lastText(), /C'est fait/);
   assert.equal(findUrlButton(h), null, '/language must not start pairing');
   await h.say(ALICE, '/balance');
   assert.match(h.tg.lastText(), /Connecte d'abord/);
@@ -1130,7 +1183,7 @@ test('language: stored locale persists and unknown codes fall back to English', 
   await h.pressButton(ALICE, 'll:ru');
   assert.equal(h.store.getLocale(ALICE), 'ru');
   await h.say(ALICE, '/help');
-  assert.match(h.tg.lastText(), /Blitz Wallet для Telegram/);
+  assert.match(h.tg.lastText(), /Что я умею/);
 });
 
 // ---------------------------------------------------------------- inline mode
@@ -1163,7 +1216,7 @@ test('inline: unconnected users get a connect shortcut, never cached', async () 
   const a = lastInlineAnswer(h);
   assert.deepEqual(a.results, []);
   assert.deepEqual(a.button, {
-    text: 'Connect your Blitz Wallet first',
+    text: 'Connect your Blitz app first',
     start_parameter: 'connect',
   });
   assert.equal(a.is_personal, true);
@@ -1185,10 +1238,10 @@ test('inline: typing previews without touching the wallet', async () => {
     await inlineQuery(h, ALICE, q);
   assert.equal(h.wallet.requests.length, before);
   const [result] = lastInlineAnswer(h).results;
-  assert.equal(result.title, 'Request 5,000 sats');
+  assert.equal(result.title, 'Ask for 5,000 sats');
   assert.match(
     result.input_message_content.message_text,
-    /5,000 sats<\/b> requested — pizza &lt;b&gt;/,
+    /Asking for <b>5,000 sats<\/b> — pizza &lt;b&gt;/,
   );
   assert.ok(
     result.reply_markup.inline_keyboard[0][0],
@@ -1227,7 +1280,7 @@ test('inline: choosing the result creates one invoice, edits the message, notifi
   assert.equal(edit.inline_message_id, 'imid-1');
   assert.equal(
     edit.text,
-    '⚡ <b>5,000 sats</b> requested — pizza\nExpires in 60 min.',
+    '⚡ Asking for <b>5,000 sats</b> — pizza\nExpires in 60 min.',
   );
   assert.ok(!edit.text.includes('lnbc'), 'invoice is not shown in the chat');
   const [[open, copy], [pay]] = edit.reply_markup.inline_keyboard;
@@ -1238,7 +1291,7 @@ test('inline: choosing the result creates one invoice, edits the message, notifi
   // Short enough: Telegram's native copy button; longer: the pay page.
   assert.ok(invoice.length <= 256);
   assert.deepEqual(copy, {
-    text: '📋 Copy invoice',
+    text: '📋 Copy payment request',
     copy_text: { text: invoice },
   });
   assert.equal(pay.text, 'Pay with @BlitzTestBot');
@@ -1253,7 +1306,7 @@ test('inline: choosing the result creates one invoice, edits the message, notifi
   const dms = h.tg.calls.filter(
     c => c.method === 'sendMessage' && c.params.chat_id === ALICE,
   );
-  assert.match(dms.at(-1).params.text, /💰 Received <b>5,000 sats/);
+  assert.match(dms.at(-1).params.text, /You got <b>5,000 sats/);
   assert.match(lastInlineEdit(h).text, /✅ <b>5,000 sats<\/b> paid/);
 });
 
@@ -1280,7 +1333,7 @@ test('inline: long invoices copy through the pay page; results show the Blitz ic
   const invoice = open.url.split('#open:')[1];
   assert.ok(invoice.length > 256);
   assert.deepEqual(copy, {
-    text: '📋 Copy invoice',
+    text: '📋 Copy payment request',
     url: `https://blitzwalletapp.com/pay#${invoice}`,
   });
 });
@@ -1290,13 +1343,13 @@ test('inline: failures stay private and other chats see only a short notice', as
   await h.connect(ALICE);
   h.wallet.setOnline(false);
   await chooseInline(h, ALICE, '5000');
-  assert.equal(lastInlineEdit(h).text, 'Couldn’t create the invoice.');
+  assert.equal(lastInlineEdit(h).text, "I couldn't make the request.");
   const dm = h.tg.calls.filter(c => c.method === 'sendMessage').at(-1).params;
   assert.equal(dm.chat_id, ALICE);
-  assert.match(dm.text, /didn’t respond/);
+  assert.match(dm.text, /Blitz didn't answer/);
 
   await chooseInline(h, ALICE, 'not an amount');
-  assert.match(lastInlineEdit(h).text, /Couldn’t create an invoice/);
+  assert.match(lastInlineEdit(h).text, /can't ask for that amount/);
 });
 
 test('inline: a user only ever uses their own wallet; allowlist applies', async () => {
@@ -1307,7 +1360,7 @@ test('inline: a user only ever uses their own wallet; allowlist applies', async 
     h.wallet.requests.filter(r => r.method === 'make_invoice').length,
     0,
   );
-  assert.equal(lastInlineEdit(h).text, 'Couldn’t create the invoice.');
+  assert.equal(lastInlineEdit(h).text, "I couldn't make the request.");
 
   const p = createHarness({ config: { allowedUsers: new Set([ALICE]) } });
   await inlineQuery(p, BOB, '5000');
@@ -1411,7 +1464,7 @@ test('chat pay: Bob pays Alice’s posted invoice via the private chat; message 
   await h.say(BOB, `/start pay_${id}`);
   assert.match(
     h.tg.lastText(),
-    /You’re about to pay[\s\S]*5,000 sats[\s\S]*pizza/,
+    /Pay now\?[\s\S]*5,000 sats[\s\S]*pizza/,
   );
   assert.equal(h.tg.last().chat_id, BOB);
   await h.pressButton(BOB, 'pc:');
@@ -1433,7 +1486,7 @@ test('chat pay: Bob pays Alice’s posted invoice via the private chat; message 
   assert.ok(
     sent.some(
       ([chat, text]) =>
-        chat === ALICE && /💰 Received <b>5,000 sats/.test(text),
+        chat === ALICE && /You got <b>5,000 sats/.test(text),
     ),
     'Alice told right away',
   );
@@ -1449,7 +1502,7 @@ test('chat pay: Bob pays Alice’s posted invoice via the private chat; message 
   assert.match(
     h.tg.calls.filter(c => c.method === 'answerCallbackQuery').at(-1).params
       .text,
-    /already paid/,
+    /Already paid/,
   );
 });
 
@@ -1462,12 +1515,12 @@ test('chat pay: own invoice, unknown ids, private-only bots and unconnected paye
     h.tg.calls.filter(c => c.method === 'answerCallbackQuery').at(-1).params;
 
   await pressInline(h, ALICE, data);
-  assert.equal(lastAnswer().text, 'This is your own invoice.');
+  assert.equal(lastAnswer().text, 'This is your own request.');
   await pressInline(h, BOB, 'ip:doesnotexist');
-  assert.match(lastAnswer().text, /already paid or has expired/);
+  assert.match(lastAnswer().text, /Already paid or expired/);
 
   await h.say(BOB, `/start pay_${data.slice(3)}`);
-  assert.match(h.tg.lastText(), /Connect your wallet first/);
+  assert.match(h.tg.lastText(), /First, connect your Blitz app/);
 
   const p = createHarness({
     wallet: chatWallet(),
@@ -1479,7 +1532,7 @@ test('chat pay: own invoice, unknown ids, private-only bots and unconnected paye
   assert.equal(
     p.tg.calls.filter(c => c.method === 'answerCallbackQuery').at(-1).params
       .text,
-    'This bot is private.',
+    'Sorry, this bot is private.',
   );
 });
 
@@ -1490,10 +1543,10 @@ test('chat pay: an expired posted invoice is marked expired and can no longer be
   const id = postedPayButton(h).slice(3);
   h.clock.now += 3600_000 + 61_000;
   await h.bot.runMaintenance();
-  assert.match(lastInlineEdit(h).text, /expired unpaid/);
+  assert.match(lastInlineEdit(h).text, /expired/);
   await h.connect(BOB);
   await h.say(BOB, `/start pay_${id}`);
-  assert.match(h.tg.lastText(), /already paid or has expired/);
+  assert.match(h.tg.lastText(), /Already paid or expired/);
 });
 
 // ------------------------------------------------- one user can't stall all (M5/M6)
@@ -1542,7 +1595,7 @@ test('maintenance: rows whose check throws are logged and backed off, never star
 test('security: a flooding user gets one "slow down" per burst, not one per message (M6)', async () => {
   const h = createHarness();
   for (let i = 0; i < 100; i++) await h.say(BOB, '/help');
-  const slow = h.tg.sent().filter(t => /Slow down/.test(t));
+  const slow = h.tg.sent().filter(t => /Too fast/.test(t));
   assert.equal(slow.length, 1);
   assert.equal(h.tg.sent().length, 41, '40 replies + 1 warning');
 });
@@ -1560,18 +1613,18 @@ test('pairing: a flood of links cannot block a real user; the check button finds
     const link = findUrlButton(h);
     assert.ok(link, 'a link is still issued');
     await h.pressButton(ALICE, 'pd:');
-    assert.match(h.tg.lastText(), /hasn’t approved this link yet/);
+    assert.match(h.tg.lastText(), /Not yet/);
 
     // A stranger's junk event p-tagged to Alice's key must not hide the real one.
     h.wallet.approvePairing(link, { state: 'ab'.repeat(16) });
     h.wallet.approvePairing(link);
     await h.pressButton(ALICE, 'pd:');
     assert.equal(h.store.getWallet(ALICE).wallet_pubkey, h.wallet.pubkey);
-    assert.match(h.tg.lastText(), /payment PIN/);
+    assert.match(h.tg.lastText(), /6-digit PIN/);
 
     // Per user: 3 links, then throttled.
     for (let i = 0; i < 4; i++) await connectAndPair(h, BOB);
-    assert.match(h.tg.lastText(), /Slow down/);
+    assert.match(h.tg.lastText(), /Too fast/);
   } finally {
     [LIMITS.maxLivePairings, LIMITS.maxPendingPairings] = saved;
   }

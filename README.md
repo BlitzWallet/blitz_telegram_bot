@@ -95,7 +95,8 @@ back up the encryption key alongside the database.**
    (NWC-08). If you allowed sending, set a 6-digit payment PIN on the inline
    keypad (it never appears in chat history).
 3. Commands: `/balance`, `/receive 21000 memo`, `/send` (or paste an invoice),
-   `/transactions`, `/status`, `/disconnect`, `/help`, `/language`.
+   `/transactions`, `/status`, `/reconnect` (to change permissions),
+   `/disconnect`, `/help`, `/language`.
 
 **Request money in any chat (inline mode):** type `@YourBot 5000 pizza` in
 any chat and tap the result. The bot creates the invoice in your Blitz wallet
@@ -108,12 +109,12 @@ posted message changes to "✅ paid" and you get a private message. Needs
 BotFather `/setinline` (placeholder text) **and** `/setinlinefeedback` →
 Enabled, otherwise Telegram never tells the bot which result was picked.
 
-Older Blitz version without the pairing screen? `/connect_manual` explains the
-old way: create a connection in Blitz → Settings → Wallet Connect and paste the
-connection string (the bot deletes that message immediately).
+Only the newest Blitz version works: there is no paste-a-code option. If someone
+pastes a connection string anyway, the bot deletes it, ignores it and tells them
+to delete that connection in Blitz.
 
 Payments always show amount, the recipient's memo and expiry, and require
-**Confirm** + PIN. Forgot the PIN? `/disconnect` and connect again.
+**Confirm** + PIN. Forgot the PIN? `/reconnect`.
 
 ## Security model (summary)
 

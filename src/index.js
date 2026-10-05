@@ -91,6 +91,7 @@ async function main() {
         ['transactions', t('commands.transactions')],
         ['status', t('commands.status')],
         ['connect', t('commands.connect')],
+        ['reconnect', t('commands.reconnect')],
         ['disconnect', t('commands.disconnect')],
         ['help', t('commands.help')],
         ['language', t('commands.language')],

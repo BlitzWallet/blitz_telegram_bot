@@ -19,7 +19,6 @@ import {
   ConnectionStringError,
   containsConnectionString,
   NwcTimeoutError,
-  parseConnectionString,
 } from './nwc.js';
 
 const MIN = 60_000;
@@ -231,9 +230,9 @@ const RATE = {
 // Unanswered checks back off up to 6 h.
 const backoff = checks => Math.min(6 * 60 * MIN, MIN * 2 ** checks);
 
-// Per-user text: HELP/PASTE_HOWTO depend on the user's language.
+// Per-user text: INTRO/HELP depend on the user's language.
+const introFor = lng => tFor(lng)('intro');
 const helpFor = lng => tFor(lng)('help');
-const pasteHowtoFor = lng => tFor(lng)('paste_howto');
 
 export function createBot({
   tg,
@@ -527,10 +526,11 @@ export function createBot({
     }
     // Edits and non-text messages are only screened for secrets, never executed.
     if (update.edited_message || typeof msg.text !== 'string') {
-      return hasSecret ? connect(userId, text) : undefined;
+      return hasSecret ? send(userId, t('connect.pasted_secret')) : undefined;
     }
 
-    if (hasSecret) return connect(userId, text);
+    // Pasting a code is no longer a way to connect; it was only deleted above.
+    if (hasSecret) return send(userId, t('connect.pasted_secret'));
 
     const [, command, args = ''] =
       text.match(/^\/([a-z_]+)(?:@\w+)?\s*([\s\S]*)$/i) ?? [];
@@ -543,25 +543,28 @@ export function createBot({
         if (/^pay_[A-Za-z0-9_-]{1,32}$/.test(args.trim())) {
           return payPosted(userId, args.trim().slice(4));
         }
-        const help = helpFor(localeOf(userId, msg.from.language_code));
+        // Plain /start is the only place the intro runs; /help is the command
+        // list. New users get a Connect button that runs the /connect flow.
         return send(
           userId,
-          store.getWallet(userId) ? help : t('start.get_started', { help }),
+          introFor(localeOf(userId, msg.from.language_code)),
+          store.getWallet(userId)
+            ? {}
+            : {
+                reply_markup: {
+                  inline_keyboard: [
+                    [{ text: t('intro_button'), callback_data: 'cn:go' }],
+                  ],
+                },
+              },
         );
       }
-      case 'help': {
-        const help = helpFor(localeOf(userId, msg.from.language_code));
-        return send(userId, help);
-      }
+      case 'help':
+        return send(userId, helpFor(localeOf(userId, msg.from.language_code)));
       case 'connect':
         return askLanguage(userId, 'connect', msg.from.language_code);
       case 'language':
         return askLanguage(userId, 'manage', msg.from.language_code);
-      case 'connect_manual':
-        return send(
-          userId,
-          pasteHowtoFor(localeOf(userId, msg.from.language_code)),
-        );
       case 'balance':
         return balance(userId);
       case 'receive':
@@ -576,6 +579,8 @@ export function createBot({
         return status(userId);
       case 'disconnect':
         return askDisconnect(userId);
+      case 'reconnect':
+        return askReconnect(userId, msg.from.language_code);
     }
     if (findInvoice(text)) return startSend(userId, text);
     return send(userId, t('common.unknown_command'));
@@ -624,10 +629,14 @@ export function createBot({
         return checkInvoice(userId, id);
       case 'tx':
         return transactions(userId, Number(id) || 0, msg.message_id);
+      case 'cn':
+        return askLanguage(userId, 'connect', cq.from.language_code);
       case 'sr':
         return refreshStatus(userId);
       case 'pd':
         return checkPairing(userId);
+      case 'rc':
+        return reconnect(userId, msg.message_id);
       case 'dc':
         return id === 'yes'
           ? disconnect(userId, msg.message_id)
@@ -637,48 +646,10 @@ export function createBot({
 
   // ---------------------------------------------------------------- connect
 
-  async function connect(userId, text) {
-    const t = tu(userId);
-    if (!allow(userId, 'wallet')) return send(userId, t('common.slow_down'));
-    if (store.getWallet(userId)) {
-      return send(userId, t('connect.already_connected'));
-    }
-    let parsed;
-    try {
-      parsed = parseConnectionString(text, config.allowedRelays);
-    } catch (err) {
-      if (!(err instanceof ConnectionStringError)) throw err;
-      return send(
-        userId,
-        err.reason === 'relay'
-          ? t('connect.relay_unsupported')
-          : t('connect.invalid_string'),
-      );
-    }
-    if (store.inFlightPaymentCount(userId) > 0) {
-      return send(userId, t('common.inflight_block_connect'));
-    }
-
-    await send(userId, t('connect.checking'));
-    let conn;
-    try {
-      conn = { ...parsed, encryption: await nwc.negotiateEncryption(parsed) };
-    } catch {
-      return send(userId, t('connect.relay_unreachable'));
-    }
-    const res = await walletCall(userId, conn, 'get_info', {});
-    if (!res.result)
-      return send(
-        userId,
-        t('common.not_connected', { reason: walletTrouble(res, t) }),
-      );
-    return saveConnection(userId, conn, res.result.methods);
-  }
-
-  // Shared by both flows. `conn.secret` is the NWC client secret; it is only
-  // ever written encrypted. Never silently replaces another wallet: both
-  // entry points refuse while a wallet is connected, and this re-checks so a
-  // pairing approval that lands after a manual connect cannot swap wallets.
+  // `conn.secret` is the NWC client secret; it is only ever written
+  // encrypted. Never silently replaces another wallet: /connect refuses while
+  // a wallet is connected, and this re-checks so a pairing approval that
+  // lands late cannot swap wallets.
   async function saveConnection(userId, conn, methods) {
     const t = tu(userId);
     const granted = Array.isArray(methods)
@@ -708,24 +679,22 @@ export function createBot({
     });
 
     const can = new Set(granted);
-    const yes = '✅';
-    const no = '—';
-    const lines = [
-      t('connect.connected_title'),
-      t('connect.capabilities', {
-        balance: can.has('get_balance') ? yes : no,
-        receive: can.has('make_invoice') ? yes : no,
-        transactions: can.has('list_transactions') ? yes : no,
-        send: can.has('pay_invoice') && can.has('lookup_invoice') ? yes : no,
-      }),
-    ];
-    if (can.has('pay_invoice') && !can.has('lookup_invoice')) {
-      lines.push(t('connect.sending_off'));
-    }
-    const wid = shortWalletId(conn.walletPubkey);
-    if (wid) lines.push(t('connect.wallet_id', { id: wid }));
-    await send(userId, lines.join('\n'));
-    if (can.has('pay_invoice') && can.has('lookup_invoice')) {
+    const canPay = can.has('pay_invoice') && can.has('lookup_invoice');
+    const items = [
+      ['get_balance', 'can_balance'],
+      ['make_invoice', 'can_receive'],
+      ['list_transactions', 'can_transactions'],
+    ]
+      .filter(([method]) => can.has(method))
+      .map(([, key]) => t(`connect.${key}`));
+    if (canPay) items.push(t('connect.can_send'));
+    const blocks = [t('connect.connected_title')];
+    if (items.length)
+      blocks.push(`${t('connect.connected_intro')}\n${items.join('\n')}`);
+    if (can.has('pay_invoice') && !canPay) blocks.push(t('connect.sending_off'));
+    else if (items.length < 4) blocks.push(t('connect.some_off'));
+    await send(userId, blocks.join('\n\n'));
+    if (canPay) {
       return startPinSession(
         userId,
         { purpose: 'set' },
@@ -796,12 +765,6 @@ export function createBot({
       expiresAt: now() + LIMITS.pairingTimeoutMs,
     };
     pairings.set(userId, entry);
-    const locale = localeOf(userId);
-    const body = config.connectBudgetSats
-      ? t('pairing.body_with_budget', {
-          budget: sats(config.connectBudgetSats * 1000, locale),
-        })
-      : `${t('pairing.body_no_budget')}\n${t('pairing.no_budget_warning')}`;
     // The pairing URI is NOT printed as text. It carries the pairing
     // code (state); printing it would expose it to screenshots, forwards and
     // chat history. The button alone opens Blitz.
@@ -809,15 +772,11 @@ export function createBot({
       userId,
       [
         t('pairing.title'),
-        body,
         '',
-        t('pairing.no_secret'),
+        t('pairing.body'),
         '',
         t('pairing.link_info', { minutes: LIMITS.pairingTimeoutMs / MIN }),
-        '',
         t('pairing.check_hint'),
-        '',
-        t('pairing.manual_hint'),
       ].join('\n'),
       {
         reply_markup: {
@@ -1112,7 +1071,6 @@ export function createBot({
         t('send.confirm_expiry', {
           minutes: minutesUntil(inv.expiresAt, nowMs),
         }),
-        t('send.confirm_hash', { hash: inv.paymentHash.slice(0, 16) }),
         '',
         t('send.confirm_warn'),
       ].join('\n'),
@@ -1506,8 +1464,6 @@ export function createBot({
     }
     const { inv, id, tracked, error } = await createInvoice(userId, parsed);
     if (error) return send(userId, error);
-    const walletRow = store.getWallet(userId);
-    const wid = walletRow ? shortWalletId(walletRow.wallet_pubkey) : null;
     await send(
       userId,
       t('receive.created', {
@@ -1516,26 +1472,24 @@ export function createBot({
           ? t('receive.created_memo', { memo: escapeHtml(parsed.memo) })
           : '',
         minutes: minutesUntil(inv.expiresAt, now()),
-      }) + (wid ? `\nWallet: <code>${wid}</code>` : ''),
+      }),
     );
-    return send(
-      userId,
-      `<code>${inv.invoice}</code>`,
-      tracked
-        ? {
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  {
-                    text: t('receive.check_button'),
-                    callback_data: `ic:${id}`,
-                  },
-                ],
-              ],
-            },
-          }
-        : {},
-    );
+    // Never paste the long code as text: it goes behind a Copy button.
+    const copy =
+      inv.invoice.length <= MAX_COPY_TEXT
+        ? { text: t('inline.copy_invoice'), copy_text: { text: inv.invoice } }
+        : {
+            text: t('inline.copy_invoice'),
+            url: `${PAY_PAGE_URL}#${inv.invoice}`,
+          };
+    const rows = [[copy]];
+    if (tracked)
+      rows.push([
+        { text: t('receive.check_button'), callback_data: `ic:${id}` },
+      ]);
+    return send(userId, t('receive.copy_hint'), {
+      reply_markup: { inline_keyboard: rows },
+    });
   }
 
   // ----------------------------------------------------------- inline mode
@@ -1820,12 +1774,7 @@ export function createBot({
     const msat = Number(res.result?.balance);
     if (!res.result || !Number.isFinite(msat) || msat < 0)
       return send(userId, walletTrouble(res, t));
-    const wid = shortWalletId(wallet.wallet_pubkey);
-    return send(
-      userId,
-      t('balance.value', { amount: fmt(msat) }) +
-        (wid ? `\nWallet: <code>${wid}</code>` : ''),
-    );
+    return send(userId, t('balance.value', { amount: fmt(msat) }));
   }
 
   async function transactions(userId, page, messageId) {
@@ -1982,6 +1931,35 @@ export function createBot({
     dropPairing(userId);
     log.info('wallet disconnected', { user: log.user(userId) });
     return edit(userId, messageId, t('disconnect.done'));
+  }
+
+  // /disconnect then /connect in one step. Permissions are only read when
+  // pairing, so this is how a change made in Blitz reaches the bot.
+  async function askReconnect(userId, tgLang) {
+    const t = tu(userId);
+    if (!store.getWallet(userId))
+      return askLanguage(userId, 'connect', tgLang);
+    // Checked before disconnecting, so the user isn't left without a wallet.
+    if (store.inFlightPaymentCount(userId) > 0)
+      return send(userId, t('common.inflight_block_connect'));
+    return send(userId, t('reconnect.prompt'), {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: t('reconnect.button_yes'), callback_data: 'rc:yes' },
+            { text: t('disconnect.button_no'), callback_data: 'dc:no' },
+          ],
+        ],
+      },
+    });
+  }
+
+  async function reconnect(userId, messageId) {
+    const t = tu(userId);
+    if (store.inFlightPaymentCount(userId) > 0)
+      return edit(userId, messageId, t('common.inflight_block_connect'));
+    await disconnect(userId, messageId);
+    return startPairing(userId);
   }
 
   // ------------------------------------------------------------ maintenance
