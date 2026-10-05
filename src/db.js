@@ -200,21 +200,24 @@ function createStore(db) {
     getPayment: (id, userId) =>
       q('SELECT * FROM payments WHERE id = ? AND user_id = ?').get(id, userId),
     // Any attempt for this hash that is not definitively over blocks a new one.
+    // 'failed' stays blocking until the invoice expires and is purged: a
+    // wallet-reported failure may follow an actual submission (H1), so the
+    // user must check Blitz instead of paying again.
     blockingPaymentForHash: (userId, paymentHash) =>
       q(
         `SELECT * FROM payments WHERE user_id = ? AND payment_hash = ?
-           AND status IN ('submitting', 'unknown', 'paid') LIMIT 1`,
+           AND status IN ('submitting', 'unknown', 'paid', 'failed') LIMIT 1`,
       ).get(userId, paymentHash),
     // THE double-payment guard. One synchronous statement: only one caller can
     // move a confirmation to 'submitting', and only if the user has no other
-    // in-flight payment and this hash was not already sent or paid.
+    // in-flight payment and this hash was not already sent, paid or failed.
     claimForSubmit(id, userId, now) {
       const result = q(
         `UPDATE payments SET status = 'submitting', updated_at = ?
          WHERE id = ? AND user_id = ? AND status = 'awaiting_confirmation' AND confirm_expires_at > ?
            AND NOT EXISTS (SELECT 1 FROM payments o WHERE o.user_id = ? AND o.status IN ('submitting', 'unknown'))
            AND NOT EXISTS (SELECT 1 FROM payments o WHERE o.user_id = ? AND o.id != ?
-                           AND o.payment_hash = payments.payment_hash AND o.status = 'paid')`,
+                           AND o.payment_hash = payments.payment_hash AND o.status IN ('paid', 'failed'))`,
       ).run(now, id, userId, now, userId, userId, id);
       return result.changes === 1;
     },

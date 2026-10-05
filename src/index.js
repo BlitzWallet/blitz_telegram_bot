@@ -63,6 +63,17 @@ async function main() {
   const bot = createBot({ tg, store, nwc, keyring, config, log });
 
   await tg.call('deleteWebhook', { drop_pending_updates: false });
+  // Verify no webhook diverts updates elsewhere, then keep checking: a
+  // stolen token lets an attacker set a webhook and impersonate the bot.
+  await tg
+    .checkWebhook?.()
+    .catch(err => log.warn('webhook check failed', { err }));
+  const webhookTimer = setInterval(
+    () =>
+      tg.checkWebhook().catch(err => log.warn('webhook check failed', { err })),
+    5 * 60_000,
+  );
+  webhookTimer.unref?.();
   await tg
     .call('setMyCommands', {
       commands: [
@@ -91,6 +102,7 @@ async function main() {
     stopping = true;
     log.info('shutting down', { signal });
     clearInterval(maintenance);
+    clearInterval(webhookTimer);
     abort.abort();
     await polling;
     await bot.drain(10_000);

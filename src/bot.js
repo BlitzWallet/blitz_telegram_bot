@@ -62,8 +62,10 @@ const PAIRING_METHODS =
 const PAIRING_OPTIONAL_METHODS = 'pay_invoice';
 
 // NIP-47 codes that mean the wallet did not (and will not) send the payment.
-// Everything else — INTERNAL, OTHER, timeouts, a result without a valid
-// preimage — is "unknown" and is reconciled, never retried.
+// These are all pre-send checks (quota, balance, permission, support). A
+// generic PAYMENT_FAILED, INTERNAL, OTHER, timeouts, or a result without a
+// valid preimage is "unknown" and is reconciled, never retried: the wallet
+// may have submitted the payment before the error reached us (H1).
 const DEFINITIVE_PAY_ERRORS = new Set([
   'QUOTA_EXCEEDED',
   'INSUFFICIENT_BALANCE',
@@ -72,7 +74,6 @@ const DEFINITIVE_PAY_ERRORS = new Set([
   'RATE_LIMITED',
   'NOT_IMPLEMENTED',
   'UNSUPPORTED_ENCRYPTION',
-  'PAYMENT_FAILED',
 ]);
 
 const BOT_METHODS = [
@@ -101,6 +102,12 @@ export function classifyPayResponse(response, paymentHash) {
 }
 
 // Interprets lookup_invoice for an outgoing payment we sent once.
+// A wallet-reported state of 'failed' is NOT trusted as final: Blitz's JS
+// handler records 'failed' even when the payment was already submitted
+// (network error after submission, PREIMAGE_PROVIDING_FAILED /
+// TRANSFER_FAILED arriving after LIGHTNING_PAYMENT_SUCCEEDED). Treat it as
+// 'unknown' so the reconciler keeps checking instead of freeing the invoice
+// for a double payment (H1).
 export function classifyPaymentLookup(response, payment, nowMs) {
   if (response?.result) {
     const r = response.result;
@@ -115,8 +122,6 @@ export function classifyPaymentLookup(response, payment, nowMs) {
         feeMsat: Number.isSafeInteger(fee) && fee >= 0 ? fee : null,
       };
     }
-    if (r.state === 'failed')
-      return { status: 'failed', reason: 'PAYMENT_FAILED' };
     return { status: 'unknown' };
   }
   if (response?.error?.code === 'NOT_FOUND') {
@@ -137,13 +142,20 @@ const escapeHtml = s =>
     /[&<>"]/g,
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c],
   );
-const sats = (msat, locale = 'en-US') => {
+const sats = (msat, locale = 'en') => {
   try {
     return Math.floor(msat / 1000).toLocaleString(locale);
   } catch {
-    return Math.floor(msat / 1000).toLocaleString('en-US');
+    return Math.floor(msat / 1000).toLocaleString('en');
   }
 };
+// Short, non-secret wallet identifier shown wherever money is discussed so a
+// silently-switched connection is visible (H3). The pubkey itself is not
+// secret (it is the author of a public kind-13194 event).
+const shortWalletId = pubkey =>
+  typeof pubkey === 'string' && /^[0-9a-f]{64}$/i.test(pubkey)
+    ? `${pubkey.slice(0, 8)}…`
+    : null;
 const fmtDate = sec =>
   new Date(sec * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 const minutesUntil = (ms, now) => Math.max(0, Math.round((ms - now) / MIN));
@@ -372,7 +384,10 @@ export function createBot({
         )?.chat;
         // Never echo the error itself; it may contain request details.
         if (chat?.type === 'private')
-          await send(userId, tu(userId, from?.from?.language_code)('common.generic_error'));
+          await send(
+            userId,
+            tu(userId, from?.from?.language_code)('common.generic_error'),
+          );
       }
     });
   }
@@ -407,8 +422,7 @@ export function createBot({
       await safe(tg.call('leaveChat', { chat_id: msg.chat.id }));
       return;
     }
-    if (!allow(userId, 'update'))
-      return send(userId, t('common.slow_down'));
+    if (!allow(userId, 'update')) return send(userId, t('common.slow_down'));
     if (config.allowedUsers && !config.allowedUsers.has(userId)) {
       return send(userId, t('common.private'));
     }
@@ -424,7 +438,8 @@ export function createBot({
     switch (command?.toLowerCase()) {
       case 'start': {
         // Deep link from inline mode's "Connect your Blitz Wallet first".
-        if (args.trim() === 'connect') return askLanguage(userId, 'connect', msg.from.language_code);
+        if (args.trim() === 'connect')
+          return askLanguage(userId, 'connect', msg.from.language_code);
         // From the "Pay" button on an invoice someone posted in a chat.
         if (/^pay_[A-Za-z0-9_-]{1,32}$/.test(args.trim())) {
           return payPosted(userId, args.trim().slice(4));
@@ -432,9 +447,7 @@ export function createBot({
         const help = helpFor(localeOf(userId, msg.from.language_code));
         return send(
           userId,
-          store.getWallet(userId)
-            ? help
-            : t('start.get_started', { help }),
+          store.getWallet(userId) ? help : t('start.get_started', { help }),
         );
       }
       case 'help': {
@@ -446,7 +459,10 @@ export function createBot({
       case 'language':
         return askLanguage(userId, 'manage', msg.from.language_code);
       case 'connect_manual':
-        return send(userId, pasteHowtoFor(localeOf(userId, msg.from.language_code)));
+        return send(
+          userId,
+          pasteHowtoFor(localeOf(userId, msg.from.language_code)),
+        );
       case 'balance':
         return balance(userId);
       case 'receive':
@@ -523,8 +539,10 @@ export function createBot({
 
   async function connect(userId, text) {
     const t = tu(userId);
-    if (!allow(userId, 'wallet'))
-      return send(userId, t('common.slow_down'));
+    if (!allow(userId, 'wallet')) return send(userId, t('common.slow_down'));
+    if (store.getWallet(userId)) {
+      return send(userId, t('connect.already_connected'));
+    }
     let parsed;
     try {
       parsed = parseConnectionString(text, config.allowedRelays);
@@ -550,12 +568,17 @@ export function createBot({
     }
     const res = await walletCall(conn, 'get_info', {});
     if (!res.result)
-      return send(userId, t('common.not_connected', { reason: walletTrouble(res, t) }));
+      return send(
+        userId,
+        t('common.not_connected', { reason: walletTrouble(res, t) }),
+      );
     return saveConnection(userId, conn, res.result.methods);
   }
 
   // Shared by both flows. `conn.secret` is the NWC client secret; it is only
-  // ever written encrypted.
+  // ever written encrypted. Never silently replaces another wallet: both
+  // entry points refuse while a wallet is connected, and this re-checks so a
+  // pairing approval that lands after a manual connect cannot swap wallets.
   async function saveConnection(userId, conn, methods) {
     const t = tu(userId);
     const granted = Array.isArray(methods)
@@ -564,8 +587,10 @@ export function createBot({
     if (!granted.length) return send(userId, t('connect.no_methods'));
 
     const nowMs = now();
-    const replaced = store.getWallet(userId);
-    // Confirmations and keypads belong to the old connection.
+    if (store.getWallet(userId)) {
+      return send(userId, t('connect.already_connected'));
+    }
+    // Confirmations and keypads belong to any previous (now impossible) state.
     store.cancelAwaiting(userId, nowMs);
     pinSessions.delete(userId);
     store.upsertWallet({
@@ -577,11 +602,9 @@ export function createBot({
       methods: granted,
       now: nowMs,
     });
-    if (replaced) store.closeOpenInvoices(userId, nowMs);
     log.info('wallet connected', {
       user: log.user(userId),
       methods: granted.join(' '),
-      replaced: !!replaced,
     });
 
     const can = new Set(granted);
@@ -593,19 +616,21 @@ export function createBot({
         balance: can.has('get_balance') ? yes : no,
         receive: can.has('make_invoice') ? yes : no,
         transactions: can.has('list_transactions') ? yes : no,
-        send:
-          can.has('pay_invoice') && can.has('lookup_invoice') ? yes : no,
+        send: can.has('pay_invoice') && can.has('lookup_invoice') ? yes : no,
       }),
     ];
     if (can.has('pay_invoice') && !can.has('lookup_invoice')) {
       lines.push(t('connect.sending_off'));
     }
-    if (replaced && replaced.wallet_pubkey !== conn.walletPubkey) {
-      lines.push(t('connect.replaced'));
-    }
+    const wid = shortWalletId(conn.walletPubkey);
+    if (wid) lines.push(t('connect.wallet_id', { id: wid }));
     await send(userId, lines.join('\n'));
     if (can.has('pay_invoice') && can.has('lookup_invoice')) {
-      return startPinSession(userId, { purpose: 'set' }, t('connect.choose_pin'));
+      return startPinSession(
+        userId,
+        { purpose: 'set' },
+        t('connect.choose_pin'),
+      );
     }
   }
 
@@ -618,6 +643,13 @@ export function createBot({
     const t = tu(userId);
     if (store.inFlightPaymentCount(userId) > 0) {
       return send(userId, t('common.inflight_block_connect'));
+    }
+    // Never silently switch wallets. An attacker with brief access to
+    // Telegram (or whoever approves a forwarded link first) must not be able
+    // to redirect future incoming payments. Switching requires an explicit
+    // /disconnect first.
+    if (store.getWallet(userId)) {
+      return send(userId, t('connect.already_connected'));
     }
     pairings.get(userId)?.abort(); // a new link replaces the previous one
     if (pairings.size >= LIMITS.maxPendingPairings) {
@@ -648,15 +680,18 @@ export function createBot({
       .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
       .join('&');
     const link = `${PAIRING_URL}?pubkey=${clientPubkey}&${params}`;
-    const uri = `nostr+walletauth://${clientPubkey}?${params}`;
 
     const abort = new AbortController();
     pairings.set(userId, abort);
+    const locale = localeOf(userId);
     const body = config.connectBudgetSats
       ? t('pairing.body_with_budget', {
-          budget: config.connectBudgetSats.toLocaleString('en-US'),
+          budget: sats(config.connectBudgetSats * 1000, locale),
         })
-      : t('pairing.body_no_budget');
+      : `${t('pairing.body_no_budget')}\n${t('pairing.no_budget_warning')}`;
+    // The pairing URI is NOT printed as text. It carries the pairing
+    // code (state); printing it would expose it to screenshots, forwards and
+    // chat history. The button alone opens Blitz.
     await send(
       userId,
       [
@@ -666,7 +701,6 @@ export function createBot({
         t('pairing.no_secret'),
         '',
         t('pairing.link_info', { minutes: LIMITS.pairingTimeoutMs / MIN }),
-        `<code>${uri}</code>`,
         '',
         t('pairing.manual_hint'),
       ].join('\n'),
@@ -871,7 +905,7 @@ export function createBot({
       return send(
         userId,
         t('send.over_limit', {
-          max: config.maxPaymentSats.toLocaleString('en-US'),
+          max: sats(config.maxPaymentSats * 1000, localeOf(userId)),
         }),
       );
     }
@@ -918,7 +952,7 @@ export function createBot({
       [
         t('send.confirm_title'),
         '',
-        t('send.confirm_amount', { amount: sats(inv.amountMsat) }),
+        t('send.confirm_amount', { amount: satsU(userId)(inv.amountMsat) }),
         t('send.confirm_memo', { memo }),
         t('send.confirm_expiry', {
           minutes: minutesUntil(inv.expiresAt, nowMs),
@@ -965,7 +999,7 @@ export function createBot({
     return startPinSession(
       userId,
       { purpose: 'pay', paymentId },
-      t('pin.pay_prompt', { amount: sats(p.amount_msat) }),
+      t('pin.pay_prompt', { amount: satsU(userId)(p.amount_msat) }),
       messageId,
     );
   }
@@ -1038,7 +1072,7 @@ export function createBot({
     await edit(
       userId,
       messageId,
-      t('send.sending', { amount: sats(payment.amount_msat) }),
+      t('send.sending', { amount: satsU(userId)(payment.amount_msat) }),
     );
     track(submitPayment(payment, conn));
   }
@@ -1090,6 +1124,7 @@ export function createBot({
 
   function applyPaymentOutcome(payment, outcome, firstAttempt) {
     const t = tu(payment.user_id);
+    const fmt = satsU(payment.user_id);
     const nowMs = now();
     const checks = firstAttempt ? 0 : payment.checks + 1;
     if (outcome.status === 'unknown') {
@@ -1106,7 +1141,7 @@ export function createBot({
         return track(
           send(
             payment.user_id,
-            t('send.unknown_first', { amount: sats(payment.amount_msat) }),
+            t('send.unknown_first', { amount: fmt(payment.amount_msat) }),
           ),
         );
       }
@@ -1114,7 +1149,7 @@ export function createBot({
         return track(
           send(
             payment.user_id,
-            t('send.unknown_giveup', { amount: sats(payment.amount_msat) }),
+            t('send.unknown_giveup', { amount: fmt(payment.amount_msat) }),
           ),
         );
       }
@@ -1136,12 +1171,12 @@ export function createBot({
       if (requested) track(reconcileInvoice(requested).catch(() => {}));
       const fee =
         outcome.feeMsat != null
-          ? t('send.paid_fee', { fee: sats(outcome.feeMsat) })
+          ? t('send.paid_fee', { fee: fmt(outcome.feeMsat) })
           : '';
       return track(
         send(
           payment.user_id,
-          t('send.paid', { amount: sats(payment.amount_msat), fee }),
+          t('send.paid', { amount: fmt(payment.amount_msat), fee }),
         ),
       );
     }
@@ -1157,7 +1192,7 @@ export function createBot({
     return track(
       send(
         payment.user_id,
-        t('send.failed', { amount: sats(payment.amount_msat), why }),
+        t('send.failed', { amount: fmt(payment.amount_msat), why }),
       ),
     );
   }
@@ -1280,15 +1315,17 @@ export function createBot({
     }
     const { inv, id, tracked, error } = await createInvoice(userId, parsed);
     if (error) return send(userId, error);
+    const walletRow = store.getWallet(userId);
+    const wid = walletRow ? shortWalletId(walletRow.wallet_pubkey) : null;
     await send(
       userId,
       t('receive.created', {
-        amount: sats(inv.amountMsat),
+        amount: satsU(userId)(inv.amountMsat),
         memo: parsed.memo
           ? t('receive.created_memo', { memo: escapeHtml(parsed.memo) })
           : '',
         minutes: minutesUntil(inv.expiresAt, now()),
-      }),
+      }) + (wid ? `\nWallet: <code>${wid}</code>` : ''),
     );
     return send(
       userId,
@@ -1297,7 +1334,12 @@ export function createBot({
         ? {
             reply_markup: {
               inline_keyboard: [
-                [{ text: t('receive.check_button'), callback_data: `ic:${id}` }],
+                [
+                  {
+                    text: t('receive.check_button'),
+                    callback_data: `ic:${id}`,
+                  },
+                ],
               ],
             },
           }
@@ -1346,6 +1388,7 @@ export function createBot({
     const memo = parsed.memo
       ? t('inline.posted_memo', { memo: escapeHtml(parsed.memo) })
       : '';
+    const fmtInline = satsU(userId)(parsed.amount * 1000, q.from.language_code);
     return answer([
       {
         type: 'article',
@@ -1353,11 +1396,11 @@ export function createBot({
         thumbnail_url: INLINE_THUMBNAIL_URL,
         thumbnail_width: 512,
         thumbnail_height: 512,
-        title: t('inline.title', { amount: sats(parsed.amount * 1000) }),
+        title: t('inline.title', { amount: fmtInline }),
         description: parsed.memo || t('inline.description'),
         input_message_content: {
           message_text: t('inline.creating', {
-            amount: sats(parsed.amount * 1000),
+            amount: fmtInline,
             memo,
           }),
           parse_mode: 'HTML',
@@ -1407,7 +1450,7 @@ export function createBot({
     // in a wallet, copy it, or pay it through the bot.
     return editInline(
       t('inline.posted', {
-        amount: sats(inv.amountMsat),
+        amount: satsU(userId)(inv.amountMsat, r.from?.language_code),
         memo,
         minutes: minutesUntil(inv.expiresAt, now()),
       }),
@@ -1423,7 +1466,10 @@ export function createBot({
     return {
       inline_keyboard: [
         [
-          { text: t('inline.open_wallet'), url: `${PAY_PAGE_URL}#open:${invoice}` },
+          {
+            text: t('inline.open_wallet'),
+            url: `${PAY_PAGE_URL}#open:${invoice}`,
+          },
           copy,
         ],
         [
@@ -1471,6 +1517,7 @@ export function createBot({
   // Returns the new status, or null if unchanged/unknown.
   async function reconcileInvoice(inv, { manual = false } = {}) {
     const t = tu(inv.user_id);
+    const fmtInv = satsU(inv.user_id);
     const wallet = store.getWallet(inv.user_id);
     if (!wallet) return null;
     const nowMs = now();
@@ -1513,7 +1560,7 @@ export function createBot({
       track(
         send(
           inv.user_id,
-          t('receive.received', { amount: sats(inv.amount_msat) }),
+          t('receive.received', { amount: fmtInv(inv.amount_msat) }),
         ),
       );
     if (inv.inline_message_id) {
@@ -1525,10 +1572,10 @@ export function createBot({
             text:
               status === 'paid'
                 ? t('receive.invoice_paid_inline', {
-                    amount: sats(inv.amount_msat),
+                    amount: fmtInv(inv.amount_msat),
                   })
                 : t('receive.invoice_expired_inline', {
-                    amount: sats(inv.amount_msat),
+                    amount: fmtInv(inv.amount_msat),
                   }),
           }),
         ),
@@ -1548,8 +1595,7 @@ export function createBot({
           ? t('invoice_check.paid')
           : t('invoice_check.expired'),
       );
-    if (!allow(userId, 'wallet'))
-      return send(userId, t('common.slow_down'));
+    if (!allow(userId, 'wallet')) return send(userId, t('common.slow_down'));
     const status = await reconcileInvoice(inv, { manual: true });
     if (!status) return send(userId, t('invoice_check.not_paid'));
     if (status === 'expired') return send(userId, t('invoice_check.expired'));
@@ -1559,28 +1605,33 @@ export function createBot({
 
   async function balance(userId) {
     const t = tu(userId);
+    const fmt = satsU(userId);
     const wallet = store.getWallet(userId);
     if (!wallet) return send(userId, t('common.connect_first'));
     if (!methodsOf(wallet).has('get_balance'))
       return send(userId, t('balance.not_enabled'));
-    if (!allow(userId, 'wallet'))
-      return send(userId, t('common.slow_down'));
+    if (!allow(userId, 'wallet')) return send(userId, t('common.slow_down'));
     const res = await walletCall(connFor(wallet), 'get_balance', {});
     const msat = Number(res.result?.balance);
     if (!res.result || !Number.isFinite(msat) || msat < 0)
       return send(userId, walletTrouble(res, t));
-    return send(userId, t('balance.value', { amount: sats(msat) }));
+    const wid = shortWalletId(wallet.wallet_pubkey);
+    return send(
+      userId,
+      t('balance.value', { amount: fmt(msat) }) +
+        (wid ? `\nWallet: <code>${wid}</code>` : ''),
+    );
   }
 
   async function transactions(userId, page, messageId) {
     const t = tu(userId);
+    const fmt = satsU(userId);
     const wallet = store.getWallet(userId);
     if (!wallet) return send(userId, t('common.connect_first'));
     if (!methodsOf(wallet).has('list_transactions'))
       return send(userId, t('transactions.not_enabled'));
     page = Math.min(Math.max(0, Math.floor(page)), LIMITS.txMaxPages - 1);
-    if (!allow(userId, 'wallet'))
-      return send(userId, t('common.slow_down'));
+    if (!allow(userId, 'wallet')) return send(userId, t('common.slow_down'));
     const res = await walletCall(connFor(wallet), 'list_transactions', {
       limit: LIMITS.txPageSize,
       offset: page * LIMITS.txPageSize,
@@ -1597,15 +1648,17 @@ export function createBot({
         ? fmtDate(Number(tx.created_at))
         : t('transactions.unknown_date');
       const dir =
-        tx.type === 'incoming' ? t('transactions.received') : t('transactions.sent');
+        tx.type === 'incoming'
+          ? t('transactions.received')
+          : t('transactions.sent');
       const fee =
         Number(tx.fees_paid) > 0 && tx.type !== 'incoming'
-          ? t('transactions.fee', { fee: sats(Number(tx.fees_paid)) })
+          ? t('transactions.fee', { fee: fmt(Number(tx.fees_paid)) })
           : '';
       const state = ['pending', 'failed', 'expired'].includes(tx.state)
         ? t('transactions.state', { state: tx.state })
         : '';
-      return [`${when}  ${dir} <b>${sats(amount)}</b> sats${fee}${state}`];
+      return [`${when}  ${dir} <b>${fmt(amount)}</b> sats${fee}${state}`];
     });
     const text = lines.length
       ? `${t('transactions.title', { page: page + 1 })}\n\n${lines.join('\n')}`
@@ -1614,9 +1667,15 @@ export function createBot({
         : t('transactions.empty_page');
     const nav = [];
     if (page > 0)
-      nav.push({ text: t('transactions.newer'), callback_data: `tx:${page - 1}` });
+      nav.push({
+        text: t('transactions.newer'),
+        callback_data: `tx:${page - 1}`,
+      });
     if (list.length >= LIMITS.txPageSize && page < LIMITS.txMaxPages - 1)
-      nav.push({ text: t('transactions.older'), callback_data: `tx:${page + 1}` });
+      nav.push({
+        text: t('transactions.older'),
+        callback_data: `tx:${page + 1}`,
+      });
     const extra = nav.length
       ? { reply_markup: { inline_keyboard: [nav] } }
       : {};
@@ -1627,6 +1686,7 @@ export function createBot({
 
   async function status(userId) {
     const t = tu(userId);
+    const fmt = satsU(userId);
     const PAY_LABEL = {
       submitting: t('status.pay_submitting'),
       unknown: t('status.pay_unknown'),
@@ -1651,14 +1711,14 @@ export function createBot({
       lines.push(t('status.payments_title'));
       for (const p of payments)
         lines.push(
-          `${fmtDate(p.created_at / 1000)}  ${sats(p.amount_msat)} sats  ${PAY_LABEL[p.status] ?? p.status}`,
+          `${fmtDate(p.created_at / 1000)}  ${fmt(p.amount_msat)} sats  ${PAY_LABEL[p.status] ?? p.status}`,
         );
     }
     if (invoices.length) {
       lines.push('', t('status.invoices_title'));
       for (const i of invoices)
         lines.push(
-          `${fmtDate(i.created_at / 1000)}  ${sats(i.amount_msat)} sats  ${INV_LABEL[i.status] ?? i.status}`,
+          `${fmtDate(i.created_at / 1000)}  ${fmt(i.amount_msat)} sats  ${INV_LABEL[i.status] ?? i.status}`,
         );
     }
     const pending =
@@ -1681,8 +1741,7 @@ export function createBot({
 
   async function refreshStatus(userId) {
     const t = tu(userId);
-    if (!allow(userId, 'wallet'))
-      return send(userId, t('common.slow_down'));
+    if (!allow(userId, 'wallet')) return send(userId, t('common.slow_down'));
     for (const p of store.recentPayments(userId))
       if (p.status === 'unknown') await reconcilePayment(p);
     for (const i of store.recentInvoices(userId))
@@ -1696,21 +1755,19 @@ export function createBot({
     const t = tu(userId);
     if (!store.getWallet(userId)) return send(userId, t('disconnect.none'));
     const warn =
-      store.inFlightPaymentCount(userId) > 0 ? t('disconnect.inflight_warn') : '';
-    return send(
-      userId,
-      t('disconnect.prompt', { warn }),
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: t('disconnect.button_yes'), callback_data: 'dc:yes' },
-              { text: t('disconnect.button_no'), callback_data: 'dc:no' },
-            ],
+      store.inFlightPaymentCount(userId) > 0
+        ? t('disconnect.inflight_warn')
+        : '';
+    return send(userId, t('disconnect.prompt', { warn }), {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: t('disconnect.button_yes'), callback_data: 'dc:yes' },
+            { text: t('disconnect.button_no'), callback_data: 'dc:no' },
           ],
-        },
+        ],
       },
-    );
+    });
   }
 
   async function disconnect(userId, messageId) {

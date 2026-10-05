@@ -38,19 +38,22 @@
     "capabilities": "{{balance}} Guthaben   {{receive}} Empfangen   {{transactions}} Transaktionen   {{send}} Senden",
     "sending_off": "Senden ist aus: Aktiviere zusätzlich <b>Rechnung nachschauen</b>, damit ich bestätigen kann, ob eine Zahlung angekommen ist.",
     "replaced": "Deine vorherige Verbindung wurde ersetzt. Lösche sie in $t(paths.both), damit sie nicht mehr verwendet werden kann.",
-    "choose_pin": "Wähle eine 6-stellige <b>Zahlungs-PIN</b>. Du gibst sie bei jeder Zahlung auf diesem Tastenfeld ein; sie erscheint nie im Chat."
+    "choose_pin": "Wähle eine 6-stellige <b>Zahlungs-PIN</b>. Du gibst sie bei jeder Zahlung auf diesem Tastenfeld ein; sie erscheint nie im Chat.",
+    "already_connected": "Hier ist bereits eine Wallet verbunden (ein Wechsel würde künftige eingehende Zahlungen umleiten). Zum Wechseln erst /disconnect, dann erneut /connect nutzen.",
+    "wallet_id": "Wallet: <code>{{id}}</code>"
   },
   "pairing": {
     "title": "<b>Verbinde deine Blitz Wallet</b>",
     "body_with_budget": "Tippe auf dem Handy, auf dem Blitz installiert ist, auf den Button und bestätige die Anfrage. Der Bot erhält Zugriff auf dein Wallet-Connect-Konto (ein separates Guthaben) und, falls du Senden erlaubst, ein Limit von {{budget}} Sats pro Tag. Du kannst es jederzeit in $t(paths.both) ändern oder entfernen.",
     "body_no_budget": "Tippe auf dem Handy, auf dem Blitz installiert ist, auf den Button und bestätige die Anfrage. Der Bot erhält Zugriff auf dein Wallet-Connect-Konto (ein separates Guthaben). Du kannst es jederzeit in $t(paths.both) ändern oder entfernen.",
     "no_secret": "Es wird nichts Geheimes geteilt: Es gibt keinen Verbindungsstring zum Kopieren.",
-    "link_info": "Dieser Link ist {{minutes}} Minuten gültig. Blitz auf einem anderen Gerät? Scanne oder füge dies in Blitz ein:",
+    "link_info": "Dieser Link ist {{minutes}} Minuten gültig. Öffne ihn auf dem Handy, auf dem Blitz installiert ist:",
     "manual_hint": "Ältere Blitz-Version? Nutze /connect_manual.",
     "button": "In Blitz verbinden",
     "approved_but_inflight": "Blitz hat die Verbindung bestätigt, aber eine Zahlung wird noch bestätigt, daher habe ich nicht gewechselt. Lösche die neue Verbindung in $t(paths.both) und versuche /connect später erneut.",
     "relay_unsupported": "Deine Wallet wollte ein Relay nutzen, das dieser Bot nicht unterstützt, daher habe ich nicht verbunden. Lösche die neue Verbindung in $t(paths.both).",
-    "expired": "Der Verbindungslink ist abgelaufen. Sende /connect für einen neuen Link."
+    "expired": "Der Verbindungslink ist abgelaufen. Sende /connect für einen neuen Link.",
+    "no_budget_warning": "⚠️ Für diese Verbindung wurde kein Ausgabenlimit festgelegt: Wenn du Senden erlaubst, behandelt Blitz sie als unbegrenzt. Lege in Blitz ein Tagesbudget fest, wenn du eines möchtest."
   },
   "pin": {
     "expired": "Dieses Tastenfeld ist abgelaufen.",
@@ -99,7 +102,7 @@
     "unknown_giveup": "⚠️ Die Zahlung von <b>{{amount}} Sats</b> ist nach 3 Tagen noch unbestätigt. Bitte prüfe den endgültigen Status in der Blitz-App.",
     "paid": "✅ <b>{{amount}} Sats</b> bezahlt{{fee}}.",
     "paid_fee": " (Gebühr {{fee}} Sats)",
-    "failed": "❌ Zahlung von <b>{{amount}} Sats</b> fehlgeschlagen. Kein Geld hat deine Wallet verlassen. {{why}}",
+    "failed": "❌ Die Wallet meldet: Die Zahlung von <b>{{amount}} Sats</b> ist fehlgeschlagen. {{why}} Prüfe Blitz, bevor du erneut zahlst — sie könnte trotzdem angekommen sein.",
     "fail_QUOTA_EXCEEDED": "Dies würde das Budget überschreiten, das du für diese Verbindung in Blitz festgelegt hast.",
     "fail_INSUFFICIENT_BALANCE": "Dein Wallet-Connect-Konto hat nicht genug Guthaben.",
     "fail_RESTRICTED": "Diese Verbindung darf keine Zahlungen senden.",

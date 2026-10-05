@@ -38,19 +38,22 @@
     "capabilities": "{{balance}} Saldo   {{receive}} Ta emot   {{transactions}} Transaktioner   {{send}} Skicka",
     "sending_off": "Skicka är av: aktivera även <b>Slå upp faktura</b> så jag kan bekräfta om en betalning gick igenom.",
     "replaced": "Din tidigare anslutning ersattes. Ta bort den i $t(paths.both) så att den inte längre kan användas.",
-    "choose_pin": "Välj en 6-siffrig <b>betal-PIN</b>. Du anger den på knappsatsen vid varje betalning; den visas aldrig i chatten."
+    "choose_pin": "Välj en 6-siffrig <b>betal-PIN</b>. Du anger den på knappsatsen vid varje betalning; den visas aldrig i chatten.",
+    "already_connected": "En wallet är redan ansluten här (ett byte skulle omdirigera framtida inkommande betalningar). För att byta, använd först /disconnect och sedan /connect igen.",
+    "wallet_id": "Wallet: <code>{{id}}</code>"
   },
   "pairing": {
     "title": "<b>Anslut din Blitz Wallet</b>",
     "body_with_budget": "Tryck på knappen på telefonen där Blitz är installerat och godkänn begäran. Boten får åtkomst till ditt Wallet Connect-konto (ett separat saldo) och, om du tillåter skickande, en gräns på {{budget}} sats per dag. Du kan ändra eller ta bort det när som helst i $t(paths.both).",
     "body_no_budget": "Tryck på knappen på telefonen där Blitz är installerat och godkänn begäran. Boten får åtkomst till ditt Wallet Connect-konto (ett separat saldo). Du kan ändra eller ta bort det när som helst i $t(paths.both).",
     "no_secret": "Inget hemligt delas: det finns ingen anslutningssträng att kopiera.",
-    "link_info": "Länken gäller i {{minutes}} minuter. Blitz på en annan enhet? Skanna eller klistra in detta i Blitz:",
+    "link_info": "Länken gäller i {{minutes}} minuter. Öppna den på telefonen där Blitz är installerat:",
     "manual_hint": "Äldre Blitz-version? Använd /connect_manual.",
     "button": "Anslut i Blitz",
     "approved_but_inflight": "Blitz godkände anslutningen, men en betalning bekräftas fortfarande, så jag bytte inte. Ta bort den nya anslutningen i $t(paths.both) och försök /connect igen senare.",
     "relay_unsupported": "Din wallet bad om en relay som boten inte stöder, så jag anslöt inte. Ta bort den nya anslutningen i $t(paths.both).",
-    "expired": "Anslutningslänken har gått ut. Skicka /connect för en ny länk."
+    "expired": "Anslutningslänken har gått ut. Skicka /connect för en ny länk.",
+    "no_budget_warning": "⚠️ Ingen utgiftsgräns har konfigurerats för den här anslutningen: om du tillåter sändning behandlar Blitz den som obegränsad. Ställ in en daglig budget i Blitz om du vill ha en."
   },
   "pin": {
     "expired": "Knappsatsen har gått ut.",
@@ -99,7 +102,7 @@
     "unknown_giveup": "⚠️ Betalningen på <b>{{amount}} sats</b> är fortfarande obekräftad efter 3 dagar. Kolla slutstatusen i Blitz-appen.",
     "paid": "✅ <b>{{amount}} sats</b> betalda{{fee}}.",
     "paid_fee": " (avgift {{fee}} sats)",
-    "failed": "❌ Betalning på <b>{{amount}} sats</b> misslyckades. Inga pengar lämnade din wallet. {{why}}",
+    "failed": "❌ Walleten rapporterar att betalningen på <b>{{amount}} sats</b> misslyckades. {{why}} Kontrollera Blitz innan du betalar igen — den kan ha gått igenom.",
     "fail_QUOTA_EXCEEDED": "Detta skulle överskrida budgeten du satt för anslutningen i Blitz.",
     "fail_INSUFFICIENT_BALANCE": "Ditt Wallet Connect-konto har inte tillräckligt med pengar.",
     "fail_RESTRICTED": "Anslutningen får inte skicka betalningar.",

@@ -38,19 +38,22 @@
     "capabilities": "{{balance}} Balance   {{receive}} Receive   {{transactions}} Transactions   {{send}} Send",
     "sending_off": "Sending is off: also enable <b>Lookup Invoice</b> so I can confirm whether a payment went through.",
     "replaced": "Your previous connection was replaced. Delete it in $t(paths.both) so it can’t be used anymore.",
-    "choose_pin": "Choose a 6-digit <b>payment PIN</b>. You’ll enter it on this keypad for every payment; it never appears in the chat."
+    "choose_pin": "Choose a 6-digit <b>payment PIN</b>. You’ll enter it on this keypad for every payment; it never appears in the chat.",
+    "already_connected": "A wallet is already connected here (switching wallets would redirect future incoming payments). To switch, use /disconnect first, then /connect again.",
+    "wallet_id": "Wallet: <code>{{id}}</code>"
   },
   "pairing": {
     "title": "<b>Connect your Blitz Wallet</b>",
     "body_with_budget": "Tap the button on the phone where Blitz is installed and approve the request. The bot gets access to your Wallet Connect account (a separate balance) and, if you allow sending, a limit of {{budget}} sats per day. You can change or remove it any time in $t(paths.both).",
     "body_no_budget": "Tap the button on the phone where Blitz is installed and approve the request. The bot gets access to your Wallet Connect account (a separate balance). You can change or remove it any time in $t(paths.both).",
     "no_secret": "Nothing secret is shared: there is no connection string to copy.",
-    "link_info": "This link works for {{minutes}} minutes. Blitz on another device? Scan or paste this in Blitz:",
+    "link_info": "This link works for {{minutes}} minutes. Open it on the phone where Blitz is installed:",
     "manual_hint": "Older Blitz version? Use /connect_manual.",
     "button": "Connect in Blitz",
     "approved_but_inflight": "Blitz approved the connection, but a payment is still being confirmed, so I didn’t switch. Delete the new connection in $t(paths.both) and try /connect again later.",
     "relay_unsupported": "Your wallet asked to use a relay this bot doesn’t support, so I didn’t connect. Delete the new connection in $t(paths.both).",
-    "expired": "The connection link expired. Send /connect for a new one."
+    "expired": "The connection link expired. Send /connect for a new one.",
+    "no_budget_warning": "⚠️ No spending limit was configured for this connection: if you allow sending, Blitz will treat it as unlimited. Set a daily budget in Blitz if you want one."
   },
   "pin": {
     "expired": "This keypad has expired.",
@@ -99,7 +102,7 @@
     "unknown_giveup": "⚠️ The payment of <b>{{amount}} sats</b> is still unconfirmed after 3 days. Please check the Blitz app for its final status.",
     "paid": "✅ Paid <b>{{amount}} sats</b>{{fee}}.",
     "paid_fee": " (fee {{fee}} sats)",
-    "failed": "❌ Payment of <b>{{amount}} sats</b> failed. No money left your wallet. {{why}}",
+    "failed": "❌ The wallet reports the payment of <b>{{amount}} sats</b> failed. {{why}} Check Blitz before paying again — it may have gone through.",
     "fail_QUOTA_EXCEEDED": "This would exceed the budget you set for this connection in Blitz.",
     "fail_INSUFFICIENT_BALANCE": "Your Wallet Connect account doesn’t have enough funds.",
     "fail_RESTRICTED": "This connection isn’t allowed to send payments.",

@@ -307,9 +307,23 @@ test('payment: definitive wallet error is "failed"', async () => {
   await pay(h, ALICE, newInvoice(h.wallet).invoice);
   assert.match(
     h.tg.lastText(),
-    /failed\. No money left your wallet\. This would exceed the budget/,
+    /reports the payment.*failed[\s\S]*exceed the budget[\s\S]*Check Blitz before paying again/,
   );
   assert.equal(h.store.recentPayments(ALICE)[0].status, 'failed');
+});
+
+test('payment: a failed payment still blocks paying the same invoice again', async () => {
+  const h = createHarness({ wallet: payingWallet() });
+  h.wallet.handlers.pay_invoice = () => ({
+    error: { code: 'QUOTA_EXCEEDED', message: 'quota' },
+  });
+  await h.connect(ALICE);
+  const { invoice } = newInvoice(h.wallet);
+  await pay(h, ALICE, invoice);
+  assert.equal(h.store.recentPayments(ALICE)[0].status, 'failed');
+  await h.say(ALICE, invoice);
+  assert.match(h.tg.lastText(), /already in progress.*check \/status/i);
+  assert.equal(payRequests(h.wallet).length, 1, 'failed invoice is not re-sent');
 });
 
 test('payment: timeout is "unknown", never "failed", and is not retried', async () => {
@@ -447,7 +461,7 @@ test('payment: concurrent confirmations allow only one in flight; a newer confir
   assert.match(h2.tg.lastText(), /expired or was already handled/);
 });
 
-test('payment: same invoice cannot be paid twice; retry allowed only after definitive failure', async () => {
+test('payment: same invoice cannot be paid twice; even a failed attempt blocks retry', async () => {
   const h = createHarness({ wallet: payingWallet() });
   await h.connect(ALICE);
   const { invoice } = newInvoice(h.wallet);
@@ -460,8 +474,13 @@ test('payment: same invoice cannot be paid twice; retry allowed only after defin
     error: { code: 'INSUFFICIENT_BALANCE', message: 'x' },
   });
   await pay(h, ALICE, f.invoice);
+  assert.equal(h.store.recentPayments(ALICE)[0].status, 'failed');
   await h.say(ALICE, f.invoice);
-  assert.ok(h.tg.button('pc:'), 'can try again after a definitive failure');
+  assert.match(
+    h.tg.lastText(),
+    /already in progress/,
+    'failed attempts stay blocked until expiry: check Blitz, do not re-send',
+  );
 });
 
 test('payment: restart during payment resumes as unknown and reconciles', async () => {
@@ -555,7 +574,7 @@ test('classifiers: pure state mapping', () => {
   assert.equal(
     classifyPayResponse({ error: { code: 'PAYMENT_FAILED' } }, paymentHash)
       .status,
-    'failed',
+    'unknown',
   );
   assert.equal(
     classifyPayResponse({ error: { code: 'OTHER' } }, paymentHash).status,
@@ -577,7 +596,7 @@ test('classifiers: pure state mapping', () => {
   );
   assert.equal(
     classifyPaymentLookup({ result: { state: 'failed' } }, p, 0).status,
-    'failed',
+    'unknown',
   );
   assert.equal(
     classifyPaymentLookup({ timeout: true }, p, 9e12).status,
@@ -684,7 +703,10 @@ test('balance: shows Wallet Connect balance in sats', async () => {
   const h = createHarness();
   await h.connect(ALICE);
   await h.say(ALICE, '/balance');
-  assert.equal(h.tg.lastText(), 'Wallet Connect balance: <b>21,000 sats</b>');
+  assert.match(
+    h.tg.lastText(),
+    /^Wallet Connect balance: <b>21,000 sats<\/b>\nWallet: <code>[0-9a-f]{8}…<\/code>$/,
+  );
 });
 
 test('transactions: pagination, empty history, no memos shown', async () => {
@@ -862,7 +884,11 @@ test('pairing: link carries only public data and the requested limits', async ()
   assert.equal(p.get('renewal_period'), 'daily');
   assert.ok(!link.href.includes('secret'));
   assert.ok(findUrlButton(h).includes('%20'), 'spaces are %20-encoded, not +');
-  assert.match(h.tg.lastText(), /<code>nostr\+walletauth:\/\/[0-9a-f]{64}\?/);
+  assert.doesNotMatch(
+    h.tg.lastText(),
+    /nostr\+walletauth:\/\//,
+    'pairing code is not printed as text (H3)',
+  );
 });
 
 test('pairing: approval stores the connection; the secret never leaves the bot', async () => {
@@ -888,7 +914,10 @@ test('pairing: approval stores the connection; the secret never leaves the bot',
   await h.enterPin(ALICE, PIN);
   await h.enterPin(ALICE, PIN);
   await h.say(ALICE, '/balance');
-  assert.equal(h.tg.lastText(), 'Wallet Connect balance: <b>21,000 sats</b>');
+  assert.match(
+    h.tg.lastText(),
+    /^Wallet Connect balance: <b>21,000 sats<\/b>\nWallet: <code>[0-9a-f]{8}…<\/code>$/,
+  );
   assert.equal(h.wallet.requests.at(-1).event.pubkey, appKey);
 });
 
@@ -981,6 +1010,37 @@ test('pairing: never switches connections while a payment is unconfirmed', async
   assert.equal(h.store.getWallet(ALICE).secret_enc, before);
 });
 
+test('pairing: an already-connected user cannot silently switch wallets (H3)', async () => {
+  const h = createHarness();
+  await h.connect(ALICE);
+  const before = h.store.getWallet(ALICE);
+  await h.say(ALICE, '/connect');
+  await h.pressButton(ALICE, 'lg:en');
+  assert.match(h.tg.lastText(), /already connected[\s\S]*\/disconnect/);
+  assert.equal(findUrlButton(h), null);
+  assert.equal(h.store.getWallet(ALICE).secret_enc, before.secret_enc);
+
+  await h.say(ALICE, h.wallet.connectionString);
+  assert.match(h.tg.lastText(), /already connected/);
+  assert.equal(h.store.getWallet(ALICE).secret_enc, before.secret_enc);
+});
+
+test('amounts: formatted in the user locale, never US-style for comma-decimal languages (H2)', async () => {
+  const { normalizeLocale } = await import('../src/i18n.js');
+  assert.equal(normalizeLocale('de'), 'de-DE');
+  const fmt = msat => Math.floor(msat / 1000).toLocaleString('de-DE');
+  assert.equal(fmt(21_000_000), '21.000');
+  assert.ok(!fmt(100_000_000).includes(','));
+
+  const h = createHarness();
+  await h.say(ALICE, '/language');
+  await h.pressButton(ALICE, 'll:de-DE');
+  await h.connect(ALICE);
+  await h.say(ALICE, '/balance');
+  assert.match(h.tg.lastText(), /21\.000/);
+  assert.doesNotMatch(h.tg.lastText(), /21,000/);
+});
+
 test('pairing: the manual paste flow is still available', async () => {
   const h = createHarness();
   await h.say(ALICE, '/connect_manual');
@@ -998,7 +1058,7 @@ test('language: /connect asks for language first, then pairs in that language', 
     findUrlButton(h)?.startsWith('https://blitzwallet.app/nwc/auth'),
     'pairing link follows language choice',
   );
-  assert.match(h.tg.lastText(), /nostr\+walletauth:\/\//);
+  assert.doesNotMatch(h.tg.lastText(), /nostr\+walletauth:\/\//);
 });
 
 test('language: /language switches language without pairing', async () => {
