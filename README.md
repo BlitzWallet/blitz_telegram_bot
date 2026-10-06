@@ -160,6 +160,9 @@ polling). Run exactly **one instance per bot token** (Telegram allows one
 - Send `SIGTERM` to stop: polling stops, in-flight work gets up to 10 s, then
   relays and DB are closed. Payments interrupted mid-flight resume as
   "unknown" on next start.
+- pm2: register once with `cd ~/blitz_telegram_bot && pm2 start
+  ecosystem.config.cjs && pm2 save`; afterwards `pm2 start|restart|logs
+  blitz_telegram_bot` works from any directory. Never register it twice.
 - Egress needed: `api.telegram.org:443` and the allowed relay(s), directly.
   Node 22's `fetch` ignores `HTTPS_PROXY` by default, so a host that can only
   reach the internet through a proxy needs a Node version/flag with proxy

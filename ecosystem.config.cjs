@@ -4,14 +4,18 @@
  * Exactly one instance per bot token: Telegram allows one getUpdates consumer
  * and the payment CAS is per-database. Never use cluster mode or instances > 1.
  *
- *   Start:   npm run start:pm2     (or: pm2 start ecosystem.config.cjs)
- *   Logs:    pm2 logs blitz-telegram-bot
- *   Save:    pm2 save && pm2 startup   (to survive reboots)
+ *   First time: cd ~/blitz_telegram_bot && pm2 start ecosystem.config.cjs && pm2 save
+ *   Then:       pm2 start|restart|logs blitz_telegram_bot   (from any directory)
+ *   Reboots:    pm2 startup   (once)
+ *
+ * The name matches the folder, so `pm2 start blitz_telegram_bot` finds this
+ * registered app. Unregistered, pm2 treats it as the folder and runs
+ * index.cjs with default settings (works, but without the ones below).
  */
 module.exports = {
   apps: [
     {
-      name: 'blitz-telegram-bot',
+      name: 'blitz_telegram_bot',
       script: 'src/index.js',
       // .env and the default DATABASE_PATH (./data/bot.db) are cwd-relative.
       cwd: __dirname,

@@ -130,12 +130,17 @@ async function main() {
   process.on('SIGTERM', shutdown);
 }
 
-// pm2 runs scripts through its own wrapper (argv[1]) and passes ours in pm_exec_path.
-if (
-  import.meta.url === `file://${process.env.pm_exec_path || process.argv[1]}`
-) {
+export function start() {
   main().catch(err => {
     process.stderr.write(`fatal: ${redact(err.message)}\n`);
     process.exit(1);
   });
+}
+
+// pm2 runs scripts through its own wrapper (argv[1]) and passes ours in pm_exec_path.
+// `pm2 start <repo dir>` goes through ../index.cjs instead, which calls start().
+if (
+  import.meta.url === `file://${process.env.pm_exec_path || process.argv[1]}`
+) {
+  start();
 }
