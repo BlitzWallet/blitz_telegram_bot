@@ -34,6 +34,24 @@ test('config: valid minimal config', () => {
   assert.deepEqual(c.allowedRelays, [RELAY]);
   assert.equal(c.allowedUsers, null);
   assert.equal(c.maxPaymentSats, 1_000_000);
+  assert.equal(c.connectBudgetSats, 100_000);
+});
+
+test('config: monthly budget, falling back to the old daily name', () => {
+  const base = {
+    TELEGRAM_BOT_TOKEN: TOKEN,
+    ENCRYPTION_KEYS: `k1:${randomBytes(32).toString('base64')}`,
+  };
+  const budget = env => loadConfig({ ...base, ...env }).connectBudgetSats;
+  assert.equal(budget({ CONNECT_DAILY_BUDGET_SATS: '5000' }), 5000);
+  assert.equal(
+    budget({
+      CONNECT_DAILY_BUDGET_SATS: '5000',
+      CONNECT_MONTHLY_BUDGET_SATS: '0',
+    }),
+    0,
+    'the new name wins, including 0',
+  );
 });
 
 test('config: rejects missing/malformed secrets and unsafe values without echoing them', () => {

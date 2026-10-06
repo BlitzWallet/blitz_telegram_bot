@@ -124,7 +124,10 @@ test('connect: stores only an encrypted secret and sets a PIN', async () => {
   await h.connect(ALICE);
   const row = h.store.getWallet(ALICE);
   assert.equal(row.wallet_pubkey, h.wallet.pubkey);
-  const secret = h.keyring.decrypt(row.secret_enc, `${ALICE}:${h.wallet.pubkey}`);
+  const secret = h.keyring.decrypt(
+    row.secret_enc,
+    `${ALICE}:${h.wallet.pubkey}`,
+  );
   assert.match(secret, /^[0-9a-f]{64}$/);
   assert.ok(!row.secret_enc.includes(secret));
   // Encrypted with the server key: a leaked database cannot be cracked alone.
@@ -176,7 +179,10 @@ test('connect: receive-only connection disables sending', async () => {
     methods: ['get_balance', 'make_invoice', 'lookup_invoice'],
   });
   assert.ok(!h.tg.button('k:'), 'no PIN prompt without pay_invoice');
-  assert.match(h.tg.lastText(), /You're connected![\s\S]*• See your balance\n• Ask others for money/);
+  assert.match(
+    h.tg.lastText(),
+    /You're connected![\s\S]*• See your balance\n• Ask others for money/,
+  );
   assert.doesNotMatch(h.tg.lastText(), /Pay people/);
   assert.match(h.tg.lastText(), /switched off/);
   await h.say(ALICE, newInvoice(h.wallet).invoice);
@@ -249,10 +255,7 @@ test('payment: confirm + PIN pays once and reports success', async () => {
   await h.connect(ALICE);
   const { invoice, paymentHash } = newInvoice(h.wallet);
   await h.say(ALICE, invoice);
-  assert.match(
-    h.tg.lastText(),
-    /Pay now\?[\s\S]*21,000 sats[\s\S]*Their note/,
-  );
+  assert.match(h.tg.lastText(), /Pay now\?[\s\S]*21,000 sats[\s\S]*Their note/);
   await h.pressButton(ALICE, 'pc:');
   assert.match(h.tg.lastText(), /Type your PIN to pay/);
   await h.enterPin(ALICE, PIN);
@@ -285,7 +288,10 @@ test('payment: invalid, expired, amountless, testnet and over-limit invoices nev
       /expired/,
     ],
     [makeInvoice({ sats: null, paymentHash }), /has no amount/],
-    [makeInvoice({ sats: 10, paymentHash, prefix: 'lntb' }), /isn't for real bitcoin/],
+    [
+      makeInvoice({ sats: 10, paymentHash, prefix: 'lntb' }),
+      /isn't for real bitcoin/,
+    ],
     [makeInvoice({ sats: 60_000, paymentHash }), /too much for one payment/],
   ];
   for (const [text, expected] of cases) {
@@ -342,7 +348,7 @@ test('payment: definitive wallet error is "failed"', async () => {
   await pay(h, ALICE, newInvoice(h.wallet).invoice);
   assert.match(
     h.tg.lastText(),
-    /didn't work[\s\S]*daily limit[\s\S]*Check the Blitz app/,
+    /didn't work[\s\S]*limit[\s\S]*Check the Blitz app/,
   );
   assert.equal(h.store.recentPayments(ALICE)[0].status, 'failed');
 });
@@ -358,7 +364,11 @@ test('payment: a failed payment still blocks paying the same invoice again', asy
   assert.equal(h.store.recentPayments(ALICE)[0].status, 'failed');
   await h.say(ALICE, invoice);
   assert.match(h.tg.lastText(), /already going/);
-  assert.equal(payRequests(h.wallet).length, 1, 'failed invoice is not re-sent');
+  assert.equal(
+    payRequests(h.wallet).length,
+    1,
+    'failed invoice is not re-sent',
+  );
 });
 
 test('payment: timeout is "unknown", never "failed", and is not retried', async () => {
@@ -367,10 +377,7 @@ test('payment: timeout is "unknown", never "failed", and is not retried', async 
   const { invoice } = newInvoice(h.wallet);
   h.wallet.handlers.pay_invoice = () => 'drop'; // wallet acts but the response is lost
   await pay(h, ALICE, invoice);
-  assert.match(
-    h.tg.lastText(),
-    /not sure yet[\s\S]*Don't pay it again/,
-  );
+  assert.match(h.tg.lastText(), /not sure yet[\s\S]*Don't pay it again/);
   assert.equal(h.store.recentPayments(ALICE)[0].status, 'unknown');
   // Same invoice again is blocked while unknown.
   await h.say(ALICE, invoice);
@@ -583,7 +590,15 @@ test('payment: wrong PINs escalate lockouts, then turn sending off', async () =>
     await h.enterPin(ALICE, '000001');
     assert.match(h.tg.lastText(), /Wrong PIN/);
   }
-  const expected = ['1 min', '5 min', '15 min', '30 min', '1 hr', '5 hr', '24 hr'];
+  const expected = [
+    '1 min',
+    '5 min',
+    '15 min',
+    '30 min',
+    '1 hr',
+    '5 hr',
+    '24 hr',
+  ];
   for (const [i, lockMs] of LIMITS.pinLocksMs.entries()) {
     await h.enterPin(ALICE, '000001');
     assert.match(h.tg.lastText(), new RegExp(`Locked for ${expected[i]}\\.`));
@@ -707,7 +722,10 @@ test('receive: creates an invoice, tracks it, notifies when paid', async () => {
     h.tg.sent().at(-2),
     /Asking for.*21,000 sats.*note: coffee &lt;b&gt;/,
   );
-  assert.equal(h.tg.lastText(), 'Tap Copy, then send it to the person who will pay you.');
+  assert.equal(
+    h.tg.lastText(),
+    'Tap Copy, then send it to the person who will pay you.',
+  );
   const copyParams = h.tg.calls
     .filter(c => c.method === 'sendMessage')
     .at(-1).params;
@@ -786,10 +804,7 @@ test('balance: shows Wallet Connect balance in sats', async () => {
   const h = createHarness();
   await h.connect(ALICE);
   await h.say(ALICE, '/balance');
-  assert.match(
-    h.tg.lastText(),
-    /^You have <b>21,000 sats<\/b>\.$/,
-  );
+  assert.match(h.tg.lastText(), /^You have <b>21,000 sats<\/b>\.$/);
 });
 
 test('transactions: pagination, empty history, no memos shown', async () => {
@@ -854,7 +869,10 @@ test('security: unexpected errors give a generic reply', async () => {
     throw new Error(`db exploded ${h.wallet.clientSecret}`);
   };
   await h.say(ALICE, '/balance');
-  assert.equal(h.tg.lastText(), 'Oops, something went wrong. Please try again.');
+  assert.equal(
+    h.tg.lastText(),
+    'Oops, something went wrong. Please try again.',
+  );
   assert.ok(!h.allOutput().includes(h.wallet.clientSecret));
 });
 
@@ -930,7 +948,9 @@ test('security: connection strings in edits and captions are deleted; edits neve
 // ------------------------------------------------------------- NWC-08 pairing
 
 const urlButtonCount = h =>
-  h.tg.calls.filter(c => JSON.stringify(c.params.reply_markup ?? {}).includes('"url"')).length;
+  h.tg.calls.filter(c =>
+    JSON.stringify(c.params.reply_markup ?? {}).includes('"url"'),
+  ).length;
 function findUrlButton(h) {
   for (const c of [...h.tg.calls].reverse()) {
     for (const row of c.params.reply_markup?.inline_keyboard ?? []) {
@@ -959,7 +979,9 @@ test('reconnect: disconnects and sends a new link so new permissions apply', asy
   await h.say(ALICE, '/reconnect');
   await h.pressButton(ALICE, 'rc:yes');
   assert.equal(h.store.getWallet(ALICE), undefined);
-  assert.ok(h.tg.sent().some(m => /Also delete the Telegram connection/.test(m)));
+  assert.ok(
+    h.tg.sent().some(m => /Also delete the Telegram connection/.test(m)),
+  );
   h.wallet.approvePairing(findUrlButton(h), {
     methods: ['get_balance', 'make_invoice', 'lookup_invoice'],
   });
@@ -990,7 +1012,12 @@ test('pairing: link carries only public data and the requested limits', async ()
   );
   assert.equal(p.get('optional_request_methods'), 'pay_invoice');
   assert.equal(p.get('max_amount'), '100000000');
-  assert.equal(p.get('renewal_period'), 'daily');
+  assert.equal(p.get('renewal_period'), 'monthly');
+  const expiresIn = Number(p.get('link_expires_at')) - Date.now() / 1000;
+  assert.ok(
+    expiresIn > 14 * 60 && expiresIn <= 15 * 60,
+    'link expires with the pairing',
+  );
   assert.ok(!link.href.includes('secret'));
   assert.ok(findUrlButton(h).includes('%20'), 'spaces are %20-encoded, not +');
   assert.doesNotMatch(
@@ -1003,8 +1030,23 @@ test('pairing: link carries only public data and the requested limits', async ()
 test('pairing: approval stores the connection; the secret never leaves the bot', async () => {
   const h = createHarness();
   await connectAndPair(h, ALICE);
+  // The fake numbers sent messages from 100 in order.
+  const sends = h.tg.calls.filter(c => c.method === 'sendMessage');
+  const idWithButton = has =>
+    100 +
+    sends.findIndex(c =>
+      c.params.reply_markup?.inline_keyboard?.flat().some(has),
+    );
+  const languagePromptId = idWithButton(b => b.callback_data === 'lg:en');
+  const linkId = idWithButton(b => b.url);
   const appKey = h.wallet.approvePairing(findUrlButton(h));
   await settlePairing(h);
+  const cleared = h.tg.calls.find(c => c.method === 'deleteMessages');
+  assert.deepEqual(
+    cleared?.params.message_ids,
+    [languagePromptId, linkId],
+    'setup messages are cleared once connected',
+  );
   const row = h.store.getWallet(ALICE);
   assert.equal(row.wallet_pubkey, h.wallet.pubkey);
   assert.equal(row.encryption, 'nip44_v2');
@@ -1019,14 +1061,16 @@ test('pairing: approval stores the connection; the secret never leaves the bot',
     'secret leaked to Telegram or logs',
   );
   assert.match(h.tg.lastText(), /6-digit PIN/);
+  assert.match(
+    h.tg.lastText(),
+    /\n\u2800{36}$/,
+    'keypad text ends with the full-width padding line',
+  );
 
   await h.enterPin(ALICE, PIN);
   await h.enterPin(ALICE, PIN);
   await h.say(ALICE, '/balance');
-  assert.match(
-    h.tg.lastText(),
-    /^You have <b>21,000 sats<\/b>\.$/,
-  );
+  assert.match(h.tg.lastText(), /^You have <b>21,000 sats<\/b>\.$/);
   assert.equal(h.wallet.requests.at(-1).event.pubkey, appKey);
 });
 
@@ -1155,7 +1199,11 @@ test('language: /connect asks for language first, then pairs in that language', 
   const h = createHarness();
   await h.say(ALICE, '/connect');
   assert.match(h.tg.lastText(), /Pick your language/);
-  assert.equal(findUrlButton(h), null, 'no pairing link before language choice');
+  assert.equal(
+    findUrlButton(h),
+    null,
+    'no pairing link before language choice',
+  );
   await h.pressButton(ALICE, 'lg:es');
   assert.equal(h.store.getLocale(ALICE), 'es');
   assert.ok(
@@ -1471,10 +1519,7 @@ test('chat pay: Bob pays Alice’s posted invoice via the private chat; message 
 
   // There, the normal Confirm + PIN flow runs.
   await h.say(BOB, `/start pay_${id}`);
-  assert.match(
-    h.tg.lastText(),
-    /Pay now\?[\s\S]*5,000 sats[\s\S]*pizza/,
-  );
+  assert.match(h.tg.lastText(), /Pay now\?[\s\S]*5,000 sats[\s\S]*pizza/);
   assert.equal(h.tg.last().chat_id, BOB);
   await h.pressButton(BOB, 'pc:');
   await h.enterPin(BOB, PIN);
@@ -1494,8 +1539,7 @@ test('chat pay: Bob pays Alice’s posted invoice via the private chat; message 
   );
   assert.ok(
     sent.some(
-      ([chat, text]) =>
-        chat === ALICE && /You got <b>5,000 sats/.test(text),
+      ([chat, text]) => chat === ALICE && /You got <b>5,000 sats/.test(text),
     ),
     'Alice told right away',
   );

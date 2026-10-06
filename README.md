@@ -69,7 +69,7 @@ For local development: `cp env.example .env`, fill it in, and run
 | `ALLOWED_RELAYS`                                 | no       | Comma-separated `wss://` relays connections may use. Default `wss://relay.getalbypro.com/blitz` (Blitz's relay).              |
 | `ALLOWED_TELEGRAM_USER_IDS`                      | no       | Restrict the bot to these numeric Telegram ids (private deployments).                                                         |
 | `MAX_PAYMENT_SATS`                               | no       | Bot-side cap per payment, default 1,000,000. The wallet budget is the real limit.                                             |
-| `CONNECT_DAILY_BUDGET_SATS`                      | no       | Daily spending limit the bot asks Blitz for when pairing, default 100,000 (`0` = ask for none). Users can change it in Blitz. |
+| `CONNECT_MONTHLY_BUDGET_SATS`                    | no       | Monthly spending limit the bot asks Blitz for when pairing, default 100,000 (`0` = ask for none). Users can change it in Blitz. Replaces `CONNECT_DAILY_BUDGET_SATS`, which is still read as a fallback. |
 | `LOG_LEVEL`                                      | no       | `debug`/`info`/`warn`/`error`, default `info`.                                                                                |
 
 Invalid configuration stops the bot at startup with a message that never
@@ -89,7 +89,7 @@ back up the encryption key alongside the database.**
 1. Send `/connect`. Pick your language, then tap **Connect in Blitz** on the phone with Blitz (or scan
    the `nostr+walletauth://` text with Blitz on another device). Blitz shows
    what the bot asks for; "Send payments" is off unless you turn it on, and
-   sending is capped by the daily limit shown. Approve.
+   sending is capped by the monthly limit shown. Approve.
 2. The bot connects. Nothing secret is ever copied or sent through Telegram:
    the bot generated its own key and Blitz only learned the public half
    (NWC-08). If you allowed sending, set a 6-digit payment PIN on the inline

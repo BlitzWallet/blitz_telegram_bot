@@ -98,7 +98,7 @@
     "paid": "✅ Paid <b>{{amount}} sats</b>{{fee}}.",
     "paid_fee": " (fee: {{fee}} sats)",
     "failed": "❌ Paying <b>{{amount}} sats</b> didn't work. {{why}} Check the Blitz app before you try again.",
-    "fail_QUOTA_EXCEEDED": "You hit the daily limit you set in Blitz.",
+    "fail_QUOTA_EXCEEDED": "You hit the limit you set in Blitz.",
     "fail_INSUFFICIENT_BALANCE": "You don't have enough money in Blitz.",
     "fail_RESTRICTED": "This connection isn't allowed to pay.",
     "fail_UNAUTHORIZED": "This connection was deleted in Blitz.",

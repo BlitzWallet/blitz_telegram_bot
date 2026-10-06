@@ -98,7 +98,7 @@
     "paid": "✅ <b>{{amount}} сат</b> оплачено{{fee}}.",
     "paid_fee": " (комиссия: {{fee}} сат)",
     "failed": "❌ Оплатить <b>{{amount}} сат</b> не получилось. {{why}} Проверьте приложение Blitz, прежде чем пробовать снова.",
-    "fail_QUOTA_EXCEEDED": "Вы достигли дневного лимита, который задали в Blitz.",
+    "fail_QUOTA_EXCEEDED": "Вы достигли лимита, который задали в Blitz.",
     "fail_INSUFFICIENT_BALANCE": "У вас недостаточно денег в Blitz.",
     "fail_RESTRICTED": "Это подключение не может платить.",
     "fail_UNAUTHORIZED": "Это подключение удалено в Blitz.",

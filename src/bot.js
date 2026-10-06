@@ -375,7 +375,7 @@ export function createBot({
           language: LANGUAGE_NAMES[normalized] ?? normalized,
         }),
       );
-      return startPairing(userId);
+      return startPairing(userId, [messageId]);
     }
     return edit(
       userId,
@@ -694,7 +694,8 @@ export function createBot({
     const blocks = [t('connect.connected_title')];
     if (items.length)
       blocks.push(`${t('connect.connected_intro')}\n${items.join('\n')}`);
-    if (can.has('pay_invoice') && !canPay) blocks.push(t('connect.sending_off'));
+    if (can.has('pay_invoice') && !canPay)
+      blocks.push(t('connect.sending_off'));
     else if (items.length < 4) blocks.push(t('connect.some_off'));
     await send(userId, blocks.join('\n\n'));
     if (canPay) {
@@ -711,7 +712,9 @@ export function createBot({
   // The bot generates the connection key itself and sends Blitz only the
   // public half in a link. Nothing secret is pasted, shown or sent through
   // Telegram, and the secret is kept in memory until Blitz approves.
-  async function startPairing(userId) {
+  // setupMessageIds: earlier messages of this flow (the language prompt),
+  // deleted with the link once the connection is made.
+  async function startPairing(userId, setupMessageIds = []) {
     const t = tu(userId);
     if (store.inFlightPaymentCount(userId) > 0) {
       return send(userId, t('common.inflight_block_connect'));
@@ -739,6 +742,7 @@ export function createBot({
     const clientPubkey = getPublicKey(sk);
     const state = randomBytes(16).toString('hex');
     const relays = [config.allowedRelays[0]];
+    const expiresAt = now() + LIMITS.pairingTimeoutMs;
     const params = [
       ['relay', relays[0]],
       ['state', state],
@@ -748,10 +752,13 @@ export function createBot({
       ],
       ['request_methods', PAIRING_METHODS],
       ['optional_request_methods', PAIRING_OPTIONAL_METHODS],
+      // Blitz-specific (not NWC-08): Blitz refuses the link after this, so a
+      // stale tap shows "expired" instead of creating a keyless connection.
+      ['link_expires_at', String(Math.floor(expiresAt / 1000))],
       ...(config.connectBudgetSats
         ? [
             ['max_amount', String(config.connectBudgetSats * 1000)],
-            ['renewal_period', 'daily'],
+            ['renewal_period', 'monthly'],
           ]
         : []),
     ]
@@ -765,13 +772,13 @@ export function createBot({
       clientPubkey,
       state,
       relays,
-      expiresAt: now() + LIMITS.pairingTimeoutMs,
+      expiresAt,
     };
     pairings.set(userId, entry);
     // The pairing URI is NOT printed as text. It carries the pairing
     // code (state); printing it would expose it to screenshots, forwards and
     // chat history. The button alone opens Blitz.
-    await send(
+    const linkMessage = await send(
       userId,
       [
         t('pairing.title'),
@@ -790,6 +797,10 @@ export function createBot({
         },
       },
     );
+    entry.setupMessageIds = [
+      ...setupMessageIds,
+      linkMessage?.message_id,
+    ].filter(Boolean);
     // Over the live limit: no subscription; the button finds the approval.
     if (livePairings >= LIMITS.maxLivePairings) return;
     livePairings++;
@@ -831,6 +842,16 @@ export function createBot({
   async function completePairing(userId, entry, info) {
     if (pairings.get(userId) !== entry) return; // superseded meanwhile
     dropPairing(userId);
+    // The link is spent; clear the setup so the chat reads "connected", then
+    // PIN. Telegram only lets bots delete messages under 48 h old; the link
+    // lives 15 min.
+    if (entry.setupMessageIds.length)
+      await safe(
+        tg.call('deleteMessages', {
+          chat_id: userId,
+          message_ids: entry.setupMessageIds,
+        }),
+      );
     const t = tu(userId);
     if (store.inFlightPaymentCount(userId) > 0) {
       return send(userId, t('pairing.approved_but_inflight'));
@@ -868,7 +889,11 @@ export function createBot({
       return send(userId, t('pairing.relay_unsupported'));
     }
     if (info?.busy) return send(userId, t('wallet.trouble_busy'));
-    if (!info) return send(userId, t('pairing.not_yet'));
+    if (!info) {
+      const reply = await send(userId, t('pairing.not_yet'));
+      if (reply?.message_id) entry.setupMessageIds.push(reply.message_id);
+      return reply;
+    }
     return completePairing(userId, entry, info);
   }
 
@@ -888,6 +913,15 @@ export function createBot({
     ),
   });
   const dots = n => '●'.repeat(n) + '○'.repeat(LIMITS.pinLength - n);
+  // Telegram sizes an inline keypad to its message bubble, so a short prompt
+  // gives a narrow keypad. A line of U+2800 (blank, but not whitespace, so
+  // Telegram keeps it) stretches the bubble to full width on phones.
+  // ponytail: fixed count, an estimate for phone widths; tune it on real
+  // devices. Too few leaves the keypad narrow, too many wraps into a second
+  // blank line. Height is set by the Telegram app and can't be changed here.
+  const PIN_WIDTH_PAD = '\u2800'.repeat(36);
+  const pinText = (prompt, filled) =>
+    `${prompt}\n\n<code>${dots(filled)}</code>\n${PIN_WIDTH_PAD}`;
 
   async function startPinSession(userId, session, prompt, messageId) {
     const t = tu(userId);
@@ -899,7 +933,7 @@ export function createBot({
       expiresAt: now() + LIMITS.pinSessionMs,
     };
     pinSessions.set(userId, s);
-    const text = `${prompt}\n\n<code>${dots(0)}</code>`;
+    const text = pinText(prompt, 0);
     if (messageId) {
       s.messageId = messageId;
       return edit(userId, messageId, text, {
@@ -935,12 +969,9 @@ export function createBot({
     if (key === 'b') s.digits = s.digits.slice(0, -1);
     else if (key && s.digits.length < LIMITS.pinLength) s.digits += key;
     if (s.digits.length < LIMITS.pinLength) {
-      return edit(
-        userId,
-        messageId,
-        `${s.prompt}\n\n<code>${dots(s.digits.length)}</code>`,
-        { reply_markup: keypadMarkup(s.nonce, t) },
-      );
+      return edit(userId, messageId, pinText(s.prompt, s.digits.length), {
+        reply_markup: keypadMarkup(s.nonce, t),
+      });
     }
 
     const pin = s.digits;
@@ -948,19 +979,16 @@ export function createBot({
     if (s.purpose === 'set') {
       if (isWeakPin(pin)) {
         s.prompt = t('pin.weak');
-        return edit(
-          userId,
-          messageId,
-          `${s.prompt}\n\n<code>${dots(0)}</code>`,
-          { reply_markup: keypadMarkup(s.nonce, t) },
-        );
+        return edit(userId, messageId, pinText(s.prompt, 0), {
+          reply_markup: keypadMarkup(s.nonce, t),
+        });
       }
       Object.assign(s, {
         purpose: 'repeat',
         first: pin,
         prompt: t('pin.repeat_prompt'),
       });
-      return edit(userId, messageId, `${s.prompt}\n\n<code>${dots(0)}</code>`, {
+      return edit(userId, messageId, pinText(s.prompt, 0), {
         reply_markup: keypadMarkup(s.nonce, t),
       });
     }
@@ -971,12 +999,9 @@ export function createBot({
           first: null,
           prompt: t('pin.mismatch'),
         });
-        return edit(
-          userId,
-          messageId,
-          `${s.prompt}\n\n<code>${dots(0)}</code>`,
-          { reply_markup: keypadMarkup(s.nonce, t) },
-        );
+        return edit(userId, messageId, pinText(s.prompt, 0), {
+          reply_markup: keypadMarkup(s.nonce, t),
+        });
       }
       pinSessions.delete(userId);
       const wallet = store.getWallet(userId);
@@ -1182,7 +1207,7 @@ export function createBot({
         r.remaining === 1
           ? t('pin.wrong_remaining_one')
           : t('pin.wrong_remaining_other', { count: r.remaining });
-      return edit(userId, messageId, `${s.prompt}\n\n<code>${dots(0)}</code>`, {
+      return edit(userId, messageId, pinText(s.prompt, 0), {
         reply_markup: keypadMarkup(s.nonce, t),
       });
     }
@@ -1936,8 +1961,7 @@ export function createBot({
   // pairing, so this is how a change made in Blitz reaches the bot.
   async function askReconnect(userId, tgLang) {
     const t = tu(userId);
-    if (!store.getWallet(userId))
-      return askLanguage(userId, 'connect', tgLang);
+    if (!store.getWallet(userId)) return askLanguage(userId, 'connect', tgLang);
     // Checked before disconnecting, so the user isn't left without a wallet.
     if (store.inFlightPaymentCount(userId) > 0)
       return send(userId, t('common.inflight_block_connect'));

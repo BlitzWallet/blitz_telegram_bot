@@ -98,7 +98,7 @@
     "paid": "✅ <b>{{amount}} Sats</b> bezahlt{{fee}}.",
     "paid_fee": " (Gebühr: {{fee}} Sats)",
     "failed": "❌ <b>{{amount}} Sats</b> zu zahlen hat nicht geklappt. {{why}} Prüfe die Blitz-App, bevor du es erneut versuchst.",
-    "fail_QUOTA_EXCEEDED": "Du hast das Tageslimit erreicht, das du in Blitz gesetzt hast.",
+    "fail_QUOTA_EXCEEDED": "Du hast das Limit erreicht, das du in Blitz gesetzt hast.",
     "fail_INSUFFICIENT_BALANCE": "Du hast nicht genug Geld in Blitz.",
     "fail_RESTRICTED": "Diese Verbindung darf nicht zahlen.",
     "fail_UNAUTHORIZED": "Diese Verbindung wurde in Blitz gelöscht.",

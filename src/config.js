@@ -76,11 +76,13 @@ export function loadConfig(env = process.env) {
     allowedUsers: allowedUsers.length ? new Set(allowedUsers) : null,
     databasePath: env.DATABASE_PATH || './data/bot.db',
     maxPaymentSats: int(env, 'MAX_PAYMENT_SATS', 1_000_000, 1, 100_000_000),
-    // Daily spending limit the bot asks Blitz for when pairing (0 = none).
+    // Monthly spending limit the bot asks Blitz for when pairing (0 = none).
+    // CONNECT_DAILY_BUDGET_SATS is the old name, still read so existing
+    // deployments keep their value (now applied per month).
     connectBudgetSats: int(
       env,
-      'CONNECT_DAILY_BUDGET_SATS',
-      100_000,
+      'CONNECT_MONTHLY_BUDGET_SATS',
+      int(env, 'CONNECT_DAILY_BUDGET_SATS', 100_000, 0, 100_000_000),
       0,
       100_000_000,
     ),
