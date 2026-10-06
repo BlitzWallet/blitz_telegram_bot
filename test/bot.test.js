@@ -724,7 +724,8 @@ test('receive: creates an invoice, tracks it, notifies when paid', async () => {
   );
   assert.equal(
     h.tg.lastText(),
-    'Tap Copy, then send it to the person who will pay you.',
+    'Tap Copy, then send it to the person who will pay you.\n' +
+      '\u2800'.repeat(36),
   );
   const copyParams = h.tg.calls
     .filter(c => c.method === 'sendMessage')
@@ -859,7 +860,7 @@ test('transactions: pagination, empty history, no memos shown', async () => {
   assert.ok(h.tg.button('tx:1'));
   await h.pressButton(ALICE, 'tx:1');
   assert.match(h.tg.lastText(), /page 2/);
-  assert.equal(h.tg.lastText().split('\n').length, 2 + 3);
+  assert.equal(h.tg.lastText().split('\n').length, 2 + 3 + 1); // + width pad
   assert.deepEqual(
     h.wallet.requests
       .filter(r => r.method === 'list_transactions')
@@ -1365,7 +1366,8 @@ test('inline: choosing the result creates one invoice, edits the message, notifi
   assert.equal(edit.inline_message_id, 'imid-1');
   assert.equal(
     edit.text,
-    'Ann &lt;Lee&gt; sent a request for <b>5,000 sats</b> — pizza',
+    'Ann &lt;Lee&gt; sent a request for <b>5,000 sats</b> — pizza\n' +
+      '\u2800'.repeat(36),
   );
   assert.ok(!edit.text.includes('lnbc'), 'invoice is not shown in the chat');
   const [[open], [pay], ...rest] = edit.reply_markup.inline_keyboard;

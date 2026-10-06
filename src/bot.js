@@ -177,7 +177,21 @@ const shortWalletId = pubkey =>
     : null;
 const fmtDate = sec =>
   new Date(sec * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
-const minutesUntil = (ms, now) => Math.max(0, Math.round((ms - now) / MIN));
+// Telegram sizes an inline keyboard to its message bubble, so a short message
+// gives narrow buttons. A line of U+2800 (blank, but not whitespace, so
+// Telegram keeps it) stretches the bubble to full width on phones.
+// ponytail: fixed count, an estimate for phone widths; tune it on real
+// devices. Too few leaves the buttons narrow, too many wraps into a second
+// blank line.
+const WIDTH_PAD = '\u2800'.repeat(36);
+const padForButtons = (text, markup) =>
+  markup?.inline_keyboard?.length ? `${text}\n${WIDTH_PAD}` : text;
+// Telegram renders <tg-time> as a clock time in the viewer's own timezone and
+// locale; the inner text is the fallback for clients that don't support it.
+const fmtClock = ms =>
+  `<tg-time unix="${Math.floor(ms / 1000)}" format="t">${new Date(ms)
+    .toISOString()
+    .slice(11, 16)} UTC</tg-time>`;
 // Localized "5 minutes" / "5 Stunden", rounded up.
 const fmtDuration = (ms, locale = 'en') => {
   const m = Math.max(1, Math.ceil(ms / MIN));
@@ -285,7 +299,7 @@ export function createBot({
         'sendMessage',
         {
           chat_id: chatId,
-          text,
+          text: padForButtons(text, extra.reply_markup),
           parse_mode: 'HTML',
           disable_web_page_preview: true,
           ...extra,
@@ -300,7 +314,7 @@ export function createBot({
       tg.call('editMessageText', {
         chat_id: chatId,
         message_id: messageId,
-        text,
+        text: padForButtons(text, extra.reply_markup),
         parse_mode: 'HTML',
         ...extra,
       }),
@@ -963,15 +977,9 @@ export function createBot({
     ),
   });
   const dots = n => '●'.repeat(n) + '○'.repeat(LIMITS.pinLength - n);
-  // Telegram sizes an inline keypad to its message bubble, so a short prompt
-  // gives a narrow keypad. A line of U+2800 (blank, but not whitespace, so
-  // Telegram keeps it) stretches the bubble to full width on phones.
-  // ponytail: fixed count, an estimate for phone widths; tune it on real
-  // devices. Too few leaves the keypad narrow, too many wraps into a second
-  // blank line. Height is set by the Telegram app and can't be changed here.
-  const PIN_WIDTH_PAD = '\u2800'.repeat(36);
+  // send/edit add the width pad, so the keypad spans the bubble.
   const pinText = (prompt, filled) =>
-    `${prompt}\n\n<code>${dots(filled)}</code>\n${PIN_WIDTH_PAD}`;
+    `${prompt}\n\n<code>${dots(filled)}</code>`;
 
   async function startPinSession(userId, session, prompt, messageId) {
     const t = tu(userId);
@@ -1166,11 +1174,7 @@ export function createBot({
         '',
         t('send.confirm_amount', { amount: satsU(userId)(inv.amountMsat) }),
         t('send.confirm_memo', { memo }),
-        t('send.confirm_expiry', {
-          minutes: minutesUntil(inv.expiresAt, nowMs),
-        }),
-        '',
-        t('send.confirm_warn'),
+        t('send.confirm_expiry', { time: fmtClock(inv.expiresAt) }),
       ].join('\n'),
       {
         reply_markup: {
@@ -1581,7 +1585,7 @@ export function createBot({
         memo: parsed.memo
           ? t('receive.created_memo', { memo: escapeHtml(parsed.memo) })
           : '',
-        minutes: minutesUntil(inv.expiresAt, now()),
+        time: fmtClock(inv.expiresAt),
       }),
     );
     // Never paste the long code as text: it goes behind a Copy button.
@@ -1654,11 +1658,11 @@ export function createBot({
         title: t('inline.title', { amount: fmtInline }),
         description: parsed.memo || t('inline.description'),
         input_message_content: {
-          message_text: t('inline.creating', {
+          message_text: `${t('inline.creating', {
             name: displayName(q.from),
             amount: fmtInline,
             memo,
-          }),
+          })}\n${WIDTH_PAD}`,
           parse_mode: 'HTML',
         },
         // A keyboard is what makes Telegram hand us an inline_message_id to edit.
@@ -1679,7 +1683,7 @@ export function createBot({
       safe(
         tg.call('editMessageText', {
           inline_message_id: r.inline_message_id,
-          text,
+          text: padForButtons(text, replyMarkup),
           parse_mode: 'HTML',
           disable_web_page_preview: true,
           ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
