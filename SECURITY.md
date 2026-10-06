@@ -7,8 +7,7 @@ vulnerabilities privately so they can be fixed before they are public.
 
 **Do not open a public issue, pull request or discussion.**
 
-Report privately through GitHub: open the repository's **Security** tab →
-**Report a vulnerability**. Include:
+Email **security@blitzwalletapp.com**. Include:
 
 - what an attacker can do, and what they need first (a Telegram account, the
   bot token, database access, a position on the relay, …)
