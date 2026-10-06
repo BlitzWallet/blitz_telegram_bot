@@ -70,6 +70,7 @@
   },
   "send": {
     "paste_prompt": "Incolla la richiesta di pagamento che vuoi pagare. È un codice lungo che spesso inizia con «ln».",
+    "placeholder": "Incolla la richiesta di pagamento",
     "not_enabled": "Pagare è spento per questa connessione. Usa /reconnect e attiva i pagamenti.",
     "err_network": "Quella richiesta di pagamento non è per bitcoin veri, quindi non posso pagarla.",
     "err_no_amount": "Quella richiesta di pagamento non ha un importo. Chiedine una nuova che ce l'abbia.",
@@ -113,6 +114,8 @@
     "unusable": "Ops, qualcosa è andato storto. Riprova.",
     "amount_mismatch": "Ops, qualcosa è andato storto. Riprova.",
     "usage": "Scrivi un importo in sat, così: <code>/receive 21000</code>",
+    "ask": "Quanti sat vuoi chiedere? Puoi aggiungere una nota dopo l'importo, così: <code>21000 pizza</code>.",
+    "placeholder": "Importo e nota, es. 21000 pizza",
     "created": "Chiedo <b>{{amount}} sat</b>{{memo}}. Questa richiesta scade tra {{minutes}} min.",
     "created_memo": " (nota: {{memo}})",
     "copy_hint": "Tocca Copia e mandala a chi ti deve pagare.",

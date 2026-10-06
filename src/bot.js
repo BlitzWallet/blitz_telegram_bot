@@ -249,6 +249,10 @@ export function createBot({
   const chains = new Map(); // userId -> promise; serializes each user's updates
   const background = new Set(); // detached payment submissions / notifications
   const pinSessions = new Map(); // userId -> keypad session (digits never persisted)
+  // Users who sent a bare /receive: their next plain message is the amount.
+  // Telegram always sends a command tapped in the menu, so this stands in for
+  // prefilling the input box.
+  const amountPrompts = new Set();
   const buckets = new Map();
   const submitting = new Set(); // payment ids owned by a live submit call
   // userId -> { abort, secret, clientPubkey, state, relays, expiresAt }
@@ -284,6 +288,11 @@ export function createBot({
         ...extra,
       }),
     );
+
+  // Opens the keyboard in reply mode with a hint in the input box.
+  const replyPrompt = placeholder => ({
+    reply_markup: { force_reply: true, input_field_placeholder: placeholder },
+  });
 
   function allow(userId, kind) {
     const spec = RATE[kind];
@@ -537,6 +546,7 @@ export function createBot({
 
     const [, command, args = ''] =
       text.match(/^\/([a-z_]+)(?:@\w+)?\s*([\s\S]*)$/i) ?? [];
+    const askedAmount = amountPrompts.delete(userId);
     switch (command?.toLowerCase()) {
       case 'start': {
         // Deep link from inline mode's "Connect your Blitz Wallet first".
@@ -571,11 +581,21 @@ export function createBot({
       case 'balance':
         return balance(userId);
       case 'receive':
-        return receive(userId, args);
+        if (args.trim()) return receive(userId, args);
+        amountPrompts.add(userId);
+        return send(
+          userId,
+          t('receive.ask'),
+          replyPrompt(t('receive.placeholder')),
+        );
       case 'send':
         return args.trim()
           ? startSend(userId, args)
-          : send(userId, t('send.paste_prompt'));
+          : send(
+              userId,
+              t('send.paste_prompt'),
+              replyPrompt(t('send.placeholder')),
+            );
       case 'transactions':
         return transactions(userId, 0);
       case 'status':
@@ -586,6 +606,7 @@ export function createBot({
         return askReconnect(userId, msg.from.language_code);
     }
     if (findInvoice(text)) return startSend(userId, text);
+    if (askedAmount && !command) return receive(userId, text);
     return send(userId, t('common.unknown_command'));
   }
 

@@ -70,6 +70,7 @@
   },
   "send": {
     "paste_prompt": "Colle la demande de paiement que tu veux payer. C'est un long code qui commence souvent par « ln ».",
+    "placeholder": "Colle la demande de paiement",
     "not_enabled": "Le paiement est éteint pour cette connexion. Utilise /reconnect et active le paiement.",
     "err_network": "Cette demande de paiement n'est pas pour de vrais bitcoins, donc je ne peux pas la payer.",
     "err_no_amount": "Cette demande de paiement n'a pas de montant. Demande-en une nouvelle qui en a un.",
@@ -113,6 +114,8 @@
     "unusable": "Oups, quelque chose s'est mal passé. Réessaie.",
     "amount_mismatch": "Oups, quelque chose s'est mal passé. Réessaie.",
     "usage": "Tape un montant en sats, comme ça : <code>/receive 21000</code>",
+    "ask": "Combien de sats veux-tu demander ? Tu peux ajouter une note après le montant, comme ça : <code>21000 pizza</code>.",
+    "placeholder": "Montant et note, ex. 21000 pizza",
     "created": "Je demande <b>{{amount}} sats</b>{{memo}}. Cette demande expire dans {{minutes}} min.",
     "created_memo": " (note : {{memo}})",
     "copy_hint": "Touche Copier, puis envoie-la à la personne qui va te payer.",

@@ -70,6 +70,7 @@
   },
   "send": {
     "paste_prompt": "Klistra in betalningsförfrågan du vill betala. Det är en lång kod som ofta börjar med ”ln”.",
+    "placeholder": "Klistra in betalningsförfrågan",
     "not_enabled": "Betalning är av för den här anslutningen. Använd /reconnect och slå på betalning.",
     "err_network": "Den betalningsförfrågan är inte för riktig bitcoin, så jag kan inte betala den.",
     "err_no_amount": "Den betalningsförfrågan har inget belopp. Be om en ny som har det.",
@@ -113,6 +114,8 @@
     "unusable": "Oj, något gick fel. Försök igen.",
     "amount_mismatch": "Oj, något gick fel. Försök igen.",
     "usage": "Skriv ett belopp i sats, så här: <code>/receive 21000</code>",
+    "ask": "Hur många sats vill du be om? Du kan lägga till en anteckning efter beloppet, så här: <code>21000 pizza</code>.",
+    "placeholder": "Belopp och anteckning, t.ex. 21000 pizza",
     "created": "Ber om <b>{{amount}} sats</b>{{memo}}. Förfrågan går ut om {{minutes}} min.",
     "created_memo": " (meddelande: {{memo}})",
     "copy_hint": "Tryck på Kopiera och skicka den sedan till den som ska betala dig.",

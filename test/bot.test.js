@@ -778,11 +778,43 @@ test('receive: invoice expires unpaid; wallet invoice with wrong amount is refus
   assert.match(h.tg.lastText(), /Oops/);
 });
 
+test('receive: bare /receive asks for the amount; the next message answers', async () => {
+  const h = createHarness({ wallet: invoicingWallet() });
+  await h.connect(ALICE);
+  await h.say(ALICE, '/receive');
+  const ask = h.tg.last();
+  assert.match(ask.text, /How many sats/);
+  assert.equal(ask.reply_markup.force_reply, true);
+  assert.match(ask.reply_markup.input_field_placeholder, /21000 pizza/);
+  await h.say(ALICE, '21000 pizza');
+  const asked = /Asking for <b>21,000 sats<\/b> \(note: pizza\)/;
+  assert.ok(h.tg.sent().some(t => asked.test(t)));
+  // One answer only: a later bare number is not a request.
+  await h.say(ALICE, '5000');
+  assert.match(h.tg.lastText(), /\/help|understand/i);
+  // Another command in between drops the prompt.
+  await h.say(ALICE, '/receive');
+  await h.say(ALICE, '/balance');
+  await h.say(ALICE, '5000');
+  assert.doesNotMatch(h.tg.lastText(), /Asking for/);
+});
+
+test('send: bare /send prompts with a paste placeholder', async () => {
+  const h = createHarness();
+  await h.connect(ALICE);
+  await h.say(ALICE, '/send');
+  const ask = h.tg.last();
+  assert.equal(ask.reply_markup.force_reply, true);
+  assert.equal(
+    ask.reply_markup.input_field_placeholder,
+    'Paste the payment request',
+  );
+});
+
 test('receive: usage errors and open-invoice cap', async () => {
   const h = createHarness({ wallet: invoicingWallet() });
   await h.connect(ALICE);
   for (const bad of [
-    '/receive',
     '/receive abc',
     '/receive 0',
     '/receive 100000001',

@@ -70,6 +70,7 @@
   },
   "send": {
     "paste_prompt": "Füge die Zahlungsanfrage ein, die du bezahlen willst. Es ist ein langer Code, der oft mit „ln“ beginnt.",
+    "placeholder": "Zahlungsanfrage einfügen",
     "not_enabled": "Zahlen ist für diese Verbindung aus. Nutze /reconnect und schalte Zahlen ein.",
     "err_network": "Diese Zahlungsanfrage ist nicht für echte Bitcoins, deshalb kann ich sie nicht zahlen.",
     "err_no_amount": "Diese Zahlungsanfrage hat keinen Betrag. Bitte um eine neue mit Betrag.",
@@ -113,6 +114,8 @@
     "unusable": "Ups, etwas ist schiefgelaufen. Bitte versuch es erneut.",
     "amount_mismatch": "Ups, etwas ist schiefgelaufen. Bitte versuch es erneut.",
     "usage": "Tippe einen Betrag in Sats, so: <code>/receive 21000</code>",
+    "ask": "Wie viele Sats willst du anfordern? Du kannst nach dem Betrag eine Notiz hinzufügen, so: <code>21000 Pizza</code>.",
+    "placeholder": "Betrag und Notiz, z. B. 21000 Pizza",
     "created": "Bitte um <b>{{amount}} Sats</b>{{memo}}. Diese Anfrage läuft in {{minutes}} Min. ab.",
     "created_memo": " (Notiz: {{memo}})",
     "copy_hint": "Tippe auf Kopieren und schicke sie dann an die Person, die dich bezahlen soll.",

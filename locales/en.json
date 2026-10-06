@@ -1,7 +1,7 @@
 {
   "intro": "<b>Hi! I'm the Blitz Wallet bot.</b> ⚡\n\nI use your Blitz <b>Wallet Connect</b> account, not your main wallet. Check your balance, ask for money, and pay people right here in Telegram.\n\n<b>Stay safe:</b> never share your PIN or secret backup words with anyone.",
   "intro_button": "Connect Wallet",
-  "help": "<b>What can I do?</b>\n\n<b>Money</b>\n/balance – See how much money you have\n/transactions – See your recent payments\n/receive – Ask someone to pay you\n/send – Pay someone\n\n<b>Your Blitz app</b>\n/status – See your payments and requests\n/connect – Connect your Blitz app\n/reconnect – Connect your Blitz app again\n/disconnect – Disconnect your Blitz app\n/language – Change language\n\n<b>Good to know</b>\n• Money is counted in <b>sats</b>. A sat is a tiny piece of bitcoin.\n• To ask for money in any chat, type my @username and an amount, like <code>5000 pizza</code>.",
+  "help": "<b>What can I do?</b>\n\n<b>Money</b>\n/balance – See how much money you have\n/transactions – See your recent payments\n/receive – Ask someone to pay you\n/send – Pay someone\n\n<b>Your Blitz app</b>\n/status – See your payments and requests\n/connect – Connect your Blitz app\n/reconnect – Connect your Blitz app again\n/disconnect – Disconnect your Blitz app\n/language – Change language\n\n<b>Good to know</b>\n• Money is counted in <b>sats</b>. A sat is a tiny piece of bitcoin.\n• To ask for money in any chat, type @BlitzWalletBot and an amount, like <code>5000 pizza</code>.",
   "paths": {
     "manage": "Blitz → Profile → Accounts → Wallet Connect → Manage Connections",
     "both": "$t(paths.manage)"
@@ -70,6 +70,7 @@
   },
   "send": {
     "paste_prompt": "Paste the payment request you want to pay. It's a long code that often starts with “ln”.",
+    "placeholder": "Paste the payment request",
     "not_enabled": "Paying is off for this connection. Use /reconnect and turn on paying.",
     "err_network": "That payment request isn't for real bitcoin, so I can't pay it.",
     "err_no_amount": "That payment request has no amount. Ask for a new one that does.",
@@ -113,6 +114,8 @@
     "unusable": "Oops, something went wrong. Please try again.",
     "amount_mismatch": "Oops, something went wrong. Please try again.",
     "usage": "Type an amount in sats, like this: <code>/receive 21000</code>",
+    "ask": "How many sats do you want to ask for? You can add a note after the amount, like <code>21000 pizza</code>.",
+    "placeholder": "Amount and note, like 21000 pizza",
     "created": "Asking for <b>{{amount}} sats</b>{{memo}}. This request expires in {{minutes}} min.",
     "created_memo": " (note: {{memo}})",
     "copy_hint": "Tap Copy, then send it to the person who will pay you.",
