@@ -615,14 +615,17 @@ export function createBot({
         answer(t('common.slow_down_short')),
       );
     const [, action, id, key] = m;
+    // Keypad taps don't wait for the answer round trip (see drawDots).
+    if (action === 'k') {
+      answer();
+      return keypad(userId, msg.message_id, id, key);
+    }
     await answer();
     if (action === 'lg' || action === 'll')
       return setLanguageAndContinue(userId, msg.message_id, id, {
         thenPair: action === 'lg',
       });
     switch (action) {
-      case 'k':
-        return keypad(userId, msg.message_id, id, key);
       case 'pc':
         return confirmPayment(userId, msg.message_id, id);
       case 'px':
@@ -946,6 +949,23 @@ export function createBot({
     s.messageId = sent?.message_id;
   }
 
+  // Dot updates are cosmetic, so they don't hold the user's chain: taps are
+  // counted at once, one edit is in flight per keypad, and taps that land
+  // meanwhile collapse into the next edit. This also keeps fast typing under
+  // Telegram's per-chat edit limit instead of queueing behind 429 waits.
+  function drawDots(userId, s, t) {
+    s.dirty = true;
+    s.drawing ??= (async () => {
+      while (s.dirty && pinSessions.get(userId) === s) {
+        s.dirty = false;
+        await edit(userId, s.messageId, pinText(s.prompt, s.digits.length), {
+          reply_markup: keypadMarkup(s.nonce, t),
+        });
+      }
+      s.drawing = null;
+    })();
+  }
+
   async function keypad(userId, messageId, nonce, key) {
     const t = tu(userId);
     const s = pinSessions.get(userId);
@@ -957,6 +977,17 @@ export function createBot({
     ) {
       return edit(userId, messageId, t('pin.expired'));
     }
+    if (!key) return;
+    if (
+      key === 'b' ||
+      (key !== 'x' && s.digits.length + 1 < LIMITS.pinLength)
+    ) {
+      s.digits = key === 'b' ? s.digits.slice(0, -1) : s.digits + key;
+      return drawDots(userId, s, t);
+    }
+    // Cancel or the last digit replaces the message: let a dots edit land first.
+    s.dirty = false;
+    await s.drawing;
     if (key === 'x') {
       pinSessions.delete(userId);
       if (s.purpose === 'pay') store.cancelPayment(s.paymentId, userId, now());
@@ -966,15 +997,7 @@ export function createBot({
         s.purpose === 'pay' ? t('pin.cancel_payment') : t('pin.cancel_setup'),
       );
     }
-    if (key === 'b') s.digits = s.digits.slice(0, -1);
-    else if (key && s.digits.length < LIMITS.pinLength) s.digits += key;
-    if (s.digits.length < LIMITS.pinLength) {
-      return edit(userId, messageId, pinText(s.prompt, s.digits.length), {
-        reply_markup: keypadMarkup(s.nonce, t),
-      });
-    }
-
-    const pin = s.digits;
+    const pin = s.digits + key;
     s.digits = '';
     if (s.purpose === 'set') {
       if (isWeakPin(pin)) {

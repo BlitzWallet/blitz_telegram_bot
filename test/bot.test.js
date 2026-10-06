@@ -1682,3 +1682,34 @@ test('pairing: a flood of links cannot block a real user; the check button finds
     [LIMITS.maxLivePairings, LIMITS.maxPendingPairings] = saved;
   }
 });
+
+test('keypad: fast taps are not held up by Telegram round trips', async () => {
+  const h = createHarness({ wallet: payingWallet() });
+  await h.connect(ALICE);
+  await h.say(ALICE, newInvoice(h.wallet).invoice);
+  await h.pressButton(ALICE, 'pc:');
+  const keypad = h.tg.button('k:');
+  const nonce = keypad.data.split(':')[1];
+  // Slow Telegram: every answer/edit takes 100 ms.
+  const inner = h.tg.call;
+  h.tg.call = async (method, params) => {
+    const r = await inner(method, params);
+    await new Promise(res => setTimeout(res, 100));
+    return r;
+  };
+  const before = h.tg.calls.length;
+  const started = Date.now();
+  await Promise.all(
+    [...'48291'].map(d => h.press(ALICE, `k:${nonce}:${d}`, keypad.messageId)),
+  );
+  assert.ok(Date.now() - started < 300, 'five taps handled without queueing');
+  // The last digit (a wrong one) must not be overwritten by a stale dots edit.
+  await h.press(ALICE, `k:${nonce}:0`, keypad.messageId);
+  await h.settle();
+  const edits = h.tg.calls
+    .slice(before)
+    .filter(c => c.method === 'editMessageText');
+  assert.ok(edits.length < 6, 'intermediate dot edits are coalesced');
+  assert.match(h.tg.lastText(), /Wrong PIN/);
+  assert.equal(payRequests(h.wallet).length, 0);
+});

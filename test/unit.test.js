@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { loadConfig } from '../src/config.js';
 import { createKeyring, hashPin, verifyPin } from '../src/crypto.js';
@@ -460,4 +461,21 @@ test('nwc: encryption negotiation prefers nip44 and falls back to nip04 only whe
     await nwc.negotiateEncryption({ walletPubkey: w.pubkey, relays: [RELAY] }),
     'nip44_v2',
   );
+});
+
+test('locales: every string uses the same {{placeholders}} as English', () => {
+  const dir = new URL('../locales/', import.meta.url);
+  const flat = (o, p = '') =>
+    Object.entries(o).flatMap(([k, v]) =>
+      typeof v === 'object' ? flat(v, `${p}${k}.`) : [[`${p}${k}`, v]],
+    );
+  const vars = s => [...s.matchAll(/{{(\w+)}}/g)].map(m => m[1]).sort();
+  const load = f => new Map(flat(JSON.parse(readFileSync(new URL(f, dir)))));
+  const en = load('en.json');
+  for (const f of readdirSync(dir)) {
+    for (const [key, text] of load(f)) {
+      if (!en.has(key)) continue;
+      assert.deepEqual(vars(text), vars(en.get(key)), `${f} ${key}`);
+    }
+  }
 });
