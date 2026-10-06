@@ -44,15 +44,23 @@ export const LIMITS = {
   pinLocksMs: [1, 5, 15, 30, 60, 300, 1440].map(m => m * MIN),
   pinSessionMs: 5 * MIN,
   retentionMs: 7 * 24 * 60 * MIN,
-  maxConcurrentWalletCalls: 100,
-  maxWalletCallsPerUser: 2, // one user's dead wallet can't hold the global slots
+  // A call only adds a pending request to the user's shared relay
+  // subscription, so the cap can be generous. Each user's updates run one at
+  // a time, so holding it takes this many accounts with dead wallets (M6).
+  maxConcurrentWalletCalls: 500,
+  maxWalletCallsPerUser: 2, // an interactive call plus a background check
+  // Background status checks have their own pool, outside the cap above:
+  // at most this many at once and one per user, oldest first (M6).
+  maxBackgroundChecks: 50,
+  checkWindow: 200, // due rows of each kind looked at per scheduling pass
   pairingTimeoutMs: 15 * MIN,
   // A pending link is a small record in memory; only the first
-  // maxLivePairings also hold a relay subscription. The rest are confirmed
-  // with the "I've approved it" button, so a flood of links can delay the
-  // automatic notice but can never block pairing (M6).
+  // maxLivePairings are watched on the relay (as keys in a few shared
+  // subscriptions). The rest are confirmed with the "I've approved it"
+  // button, so a flood of links can delay the automatic notice but can
+  // never block pairing (M6).
   maxPendingPairings: 100_000,
-  maxLivePairings: 1000,
+  maxLivePairings: 3000,
 };
 
 const PAIRING_URL = 'https://blitzwallet.app/nwc/auth';
@@ -260,7 +268,8 @@ export function createBot({
   let livePairings = 0;
   let walletCalls = 0;
   const userWalletCalls = new Map(); // userId -> in-flight wallet calls
-  let maintenanceRunning = false;
+  const checking = new Map(); // userId -> that user's running background check
+  let checkedThisRound = new Set(); // rows started since the last tick
 
   const track = promise => {
     background.add(promise);
@@ -268,16 +277,24 @@ export function createBot({
     return promise;
   };
   const safe = p => p.catch(err => log.warn('telegram call failed', { err }));
-  const send = (chatId, text, extra = {}) =>
+  // priority: 'high' for payment results, 'low' for replies that may be
+  // dropped while Telegram's send quota is backed up (see telegram.js).
+  const send = (chatId, text, extra = {}, priority) =>
     safe(
-      tg.call('sendMessage', {
-        chat_id: chatId,
-        text,
-        parse_mode: 'HTML',
-        disable_web_page_preview: true,
-        ...extra,
-      }),
+      tg.call(
+        'sendMessage',
+        {
+          chat_id: chatId,
+          text,
+          parse_mode: 'HTML',
+          disable_web_page_preview: true,
+          ...extra,
+        },
+        { priority },
+      ),
     );
+  const notify = (chatId, text) => send(chatId, text, {}, 'high');
+  const sendLow = (chatId, text) => send(chatId, text, {}, 'low');
   const edit = (chatId, messageId, text, extra = {}) =>
     safe(
       tg.call('editMessageText', {
@@ -411,12 +428,14 @@ export function createBot({
     encryption: wallet.encryption,
   });
 
-  // Every wallet round trip goes through here: global concurrency cap, and the
+  // Every wallet round trip goes through here: concurrency caps, and the
   // request carries an expiration so a delayed delivery is ignored by the wallet.
-  async function withWalletSlot(userId, fn) {
+  // Background checks skip the global cap (they are bounded by their own
+  // pool), so a flood of interactive calls can't stall payment checks.
+  async function withWalletSlot(userId, fn, { background = false } = {}) {
     const mine = userWalletCalls.get(userId) ?? 0;
     if (
-      walletCalls >= LIMITS.maxConcurrentWalletCalls ||
+      (!background && walletCalls >= LIMITS.maxConcurrentWalletCalls) ||
       mine >= LIMITS.maxWalletCallsPerUser
     )
       return { busy: true };
@@ -432,20 +451,26 @@ export function createBot({
     }
   }
 
-  const walletCall = (userId, conn, method, params) =>
-    withWalletSlot(userId, () =>
-      nwc
-        .call(conn, method, params, {
-          timeoutMs: LIMITS.readTimeoutMs,
-          expiresInSec: LIMITS.readExpiresInSec,
-        })
-        .catch(err => {
-          if (err instanceof NwcTimeoutError) return { timeout: true };
-          throw err;
-        }),
+  const walletCall = (userId, conn, method, params, opts) =>
+    withWalletSlot(
+      userId,
+      () =>
+        nwc
+          .call(conn, method, params, {
+            timeoutMs: LIMITS.readTimeoutMs,
+            expiresInSec: LIMITS.readExpiresInSec,
+          })
+          .catch(err => {
+            // Not sent: the relay refused or dropped our subscription before
+            // the request left, so the wallet was never asked (like busy).
+            if (err instanceof NwcTimeoutError)
+              return err.sent ? { timeout: true } : { busy: true };
+            throw err;
+          }),
+      opts,
     );
-  const callWallet = (wallet, method, params) =>
-    walletCall(wallet.user_id, connFor(wallet), method, params);
+  const callWallet = (wallet, method, params, opts) =>
+    walletCall(wallet.user_id, connFor(wallet), method, params, opts);
 
   const walletTrouble = (r, t = tFor('en')) =>
     r.busy
@@ -516,10 +541,11 @@ export function createBot({
     const hasSecret = containsConnectionString(text);
     if (hasSecret)
       await safe(
-        tg.call('deleteMessage', {
-          chat_id: msg.chat.id,
-          message_id: msg.message_id,
-        }),
+        tg.call(
+          'deleteMessage',
+          { chat_id: msg.chat.id, message_id: msg.message_id },
+          { priority: 'high' },
+        ),
       );
 
     if (msg.chat.type !== 'private') {
@@ -531,10 +557,10 @@ export function createBot({
     }
     if (!allow(userId, 'update'))
       return slowDown(userId, 'update', () =>
-        send(userId, t('common.slow_down')),
+        sendLow(userId, t('common.slow_down')),
       );
     if (config.allowedUsers && !config.allowedUsers.has(userId)) {
-      return send(userId, t('common.private'));
+      return sendLow(userId, t('common.private'));
     }
     // Edits and non-text messages are only screened for secrets, never executed.
     if (update.edited_message || typeof msg.text !== 'string') {
@@ -607,7 +633,7 @@ export function createBot({
     }
     if (findInvoice(text)) return startSend(userId, text);
     if (askedAmount && !command) return receive(userId, text);
-    return send(userId, t('common.unknown_command'));
+    return sendLow(userId, t('common.unknown_command'));
   }
 
   async function onCallback(cq) {
@@ -752,7 +778,7 @@ export function createBot({
     }
     if (!allow(userId, 'pairing'))
       return slowDown(userId, 'pairing', () =>
-        send(userId, t('common.slow_down')),
+        sendLow(userId, t('common.slow_down')),
       );
     dropPairing(userId); // a new link replaces the previous one
     // Full: drop the oldest link rather than refuse everyone. With the
@@ -903,7 +929,7 @@ export function createBot({
       if (entry) dropPairing(userId);
       return send(userId, t('pairing.expired'));
     }
-    if (!allow(userId, 'wallet')) return send(userId, t('common.slow_down'));
+    if (!allow(userId, 'wallet')) return sendLow(userId, t('common.slow_down'));
     let info;
     try {
       info = await withWalletSlot(userId, () => nwc.findPairing(entry));
@@ -1312,15 +1338,21 @@ export function createBot({
         now(),
       );
       let response;
+      let notSent = false;
       try {
         response = await nwc.send(conn, request, {
           timeoutMs: LIMITS.payTimeoutMs,
         });
       } catch (err) {
+        // The relay refused our subscription, so the request was never
+        // published: certainly not paid, no need to reconcile.
+        notSent = err instanceof NwcTimeoutError && !err.sent;
         if (!(err instanceof NwcTimeoutError))
           log.error('pay_invoice send error', { err });
       }
-      const outcome = classifyPayResponse(response, payment.payment_hash);
+      const outcome = notSent
+        ? { status: 'failed', reason: 'NOT_SENT' }
+        : classifyPayResponse(response, payment.payment_hash);
       log.info('payment outcome', {
         user: log.user(payment.user_id),
         status: outcome.status,
@@ -1331,7 +1363,7 @@ export function createBot({
       // e.g. DB failure after claiming. The row stays 'submitting' and
       // recoverSubmitting() turns it into 'unknown' on the next start.
       log.error('payment submit failed', { err });
-      await send(payment.user_id, t('send.submit_unknown'));
+      await notify(payment.user_id, t('send.submit_unknown'));
     } finally {
       submitting.delete(payment.id);
     }
@@ -1352,7 +1384,7 @@ export function createBot({
       });
       if (firstAttempt) {
         return track(
-          send(
+          notify(
             payment.user_id,
             t('send.unknown_first', { amount: fmt(payment.amount_msat) }),
           ),
@@ -1360,7 +1392,7 @@ export function createBot({
       }
       if (givingUp && payment.next_check_at !== null) {
         return track(
-          send(
+          notify(
             payment.user_id,
             t('send.unknown_giveup', { amount: fmt(payment.amount_msat) }),
           ),
@@ -1381,13 +1413,16 @@ export function createBot({
       // Paid a request posted through this bot: tell the requester right away
       // instead of waiting for their next scheduled check.
       const requested = store.openInvoiceByHash(payment.payment_hash);
-      if (requested) track(reconcileInvoice(requested).catch(() => {}));
+      if (requested)
+        track(
+          reconcileInvoice(requested, { background: true }).catch(() => {}),
+        );
       const fee =
         outcome.feeMsat != null
           ? t('send.paid_fee', { fee: fmt(outcome.feeMsat) })
           : '';
       return track(
-        send(
+        notify(
           payment.user_id,
           t('send.paid', { amount: fmt(payment.amount_msat), fee }),
         ),
@@ -1403,20 +1438,23 @@ export function createBot({
         NOT_SENT: t('send.fail_NOT_SENT'),
       }[outcome.reason] ?? t('send.fail_default');
     return track(
-      send(
+      notify(
         payment.user_id,
         t('send.failed', { amount: fmt(payment.amount_msat), why }),
       ),
     );
   }
 
-  async function reconcilePayment(payment) {
+  async function reconcilePayment(payment, { background = false } = {}) {
     if (submitting.has(payment.id)) return;
     const wallet = store.getWallet(payment.user_id);
     if (!wallet) return;
-    const res = await callWallet(wallet, 'lookup_invoice', {
-      payment_hash: payment.payment_hash,
-    });
+    const res = await callWallet(
+      wallet,
+      'lookup_invoice',
+      { payment_hash: payment.payment_hash },
+      { background },
+    );
     // Busy: the wallet was never asked; check again soon without backing off.
     if (res.busy)
       return store.updatePayment(payment.id, {
@@ -1731,15 +1769,21 @@ export function createBot({
   }
 
   // Returns the new status, or null if unchanged/unknown.
-  async function reconcileInvoice(inv, { manual = false } = {}) {
+  async function reconcileInvoice(
+    inv,
+    { manual = false, background = false } = {},
+  ) {
     const t = tu(inv.user_id);
     const fmtInv = satsU(inv.user_id);
     const wallet = store.getWallet(inv.user_id);
     if (!wallet) return null;
     const nowMs = now();
-    const res = await callWallet(wallet, 'lookup_invoice', {
-      payment_hash: inv.payment_hash,
-    });
+    const res = await callWallet(
+      wallet,
+      'lookup_invoice',
+      { payment_hash: inv.payment_hash },
+      { background },
+    );
     // Busy: the wallet was never asked, so this says nothing about expiry.
     if (res.busy) {
       if (!manual)
@@ -1785,7 +1829,7 @@ export function createBot({
       return null;
     if (status === 'paid')
       track(
-        send(
+        notify(
           inv.user_id,
           t('receive.received', { amount: fmtInv(inv.amount_msat) }),
         ),
@@ -1793,18 +1837,22 @@ export function createBot({
     if (inv.inline_message_id) {
       track(
         safe(
-          tg.call('editMessageText', {
-            inline_message_id: inv.inline_message_id,
-            parse_mode: 'HTML',
-            text:
-              status === 'paid'
-                ? t('receive.invoice_paid_inline', {
-                    amount: fmtInv(inv.amount_msat),
-                  })
-                : t('receive.invoice_expired_inline', {
-                    amount: fmtInv(inv.amount_msat),
-                  }),
-          }),
+          tg.call(
+            'editMessageText',
+            {
+              inline_message_id: inv.inline_message_id,
+              parse_mode: 'HTML',
+              text:
+                status === 'paid'
+                  ? t('receive.invoice_paid_inline', {
+                      amount: fmtInv(inv.amount_msat),
+                    })
+                  : t('receive.invoice_expired_inline', {
+                      amount: fmtInv(inv.amount_msat),
+                    }),
+            },
+            { priority: 'high' },
+          ),
         ),
       );
     }
@@ -1822,7 +1870,7 @@ export function createBot({
           ? t('invoice_check.paid')
           : t('invoice_check.expired'),
       );
-    if (!allow(userId, 'wallet')) return send(userId, t('common.slow_down'));
+    if (!allow(userId, 'wallet')) return sendLow(userId, t('common.slow_down'));
     const status = await reconcileInvoice(inv, { manual: true });
     if (!status) return send(userId, t('invoice_check.not_paid'));
     if (status === 'expired') return send(userId, t('invoice_check.expired'));
@@ -1837,7 +1885,7 @@ export function createBot({
     if (!wallet) return send(userId, t('common.connect_first'));
     if (!methodsOf(wallet).has('get_balance'))
       return send(userId, t('balance.not_enabled'));
-    if (!allow(userId, 'wallet')) return send(userId, t('common.slow_down'));
+    if (!allow(userId, 'wallet')) return sendLow(userId, t('common.slow_down'));
     const res = await callWallet(wallet, 'get_balance', {});
     const msat = Number(res.result?.balance);
     if (!res.result || !Number.isFinite(msat) || msat < 0)
@@ -1853,7 +1901,7 @@ export function createBot({
     if (!methodsOf(wallet).has('list_transactions'))
       return send(userId, t('transactions.not_enabled'));
     page = Math.min(Math.max(0, Math.floor(page)), LIMITS.txMaxPages - 1);
-    if (!allow(userId, 'wallet')) return send(userId, t('common.slow_down'));
+    if (!allow(userId, 'wallet')) return sendLow(userId, t('common.slow_down'));
     const res = await callWallet(wallet, 'list_transactions', {
       limit: LIMITS.txPageSize,
       offset: page * LIMITS.txPageSize,
@@ -1963,7 +2011,7 @@ export function createBot({
 
   async function refreshStatus(userId) {
     const t = tu(userId);
-    if (!allow(userId, 'wallet')) return send(userId, t('common.slow_down'));
+    if (!allow(userId, 'wallet')) return sendLow(userId, t('common.slow_down'));
     for (const p of store.recentPayments(userId))
       if (p.status === 'unknown') await reconcilePayment(p);
     for (const i of store.recentInvoices(userId))
@@ -2051,35 +2099,73 @@ export function createBot({
     }
   }
 
-  // Runs every ~30 s: expires confirmations, reconciles unknown payments and
-  // open invoices with backoff, purges old rows, trims in-memory state.
+  const checkDue = (kind, row) =>
+    kind === 'payment'
+      ? checkRow(
+          'payment',
+          row,
+          p => reconcilePayment(p, { background: true }),
+          () => applyPaymentOutcome(row, { status: 'unknown' }, false),
+        )
+      : checkRow(
+          'invoice',
+          row,
+          inv => reconcileInvoice(inv, { background: true }),
+          () =>
+            store.updateInvoice(row.id, {
+              status: 'open',
+              checks: row.checks + 1,
+              nextCheckAt: now() + backoff(row.checks + 1),
+              now: now(),
+            }),
+        );
+
+  // Status checks run in a pool of maxBackgroundChecks, one per user at a
+  // time, payments first, then oldest due. A check waiting on a dead wallet
+  // holds only its own place, never a whole round, and each finished check
+  // starts the next one (M6). A row runs at most once per tick, so one that
+  // stays due (e.g. busy) waits for the next tick instead of spinning.
+  function startChecks() {
+    try {
+      const nowMs = now();
+      const due = [
+        ...store
+          .duePayments(nowMs, LIMITS.checkWindow)
+          .map(row => ['payment', row]),
+        ...store
+          .dueInvoices(nowMs, LIMITS.checkWindow)
+          .map(row => ['invoice', row]),
+      ];
+      for (const [kind, row] of due) {
+        if (checking.size >= LIMITS.maxBackgroundChecks) return;
+        const key = `${kind}:${row.id}`;
+        if (checking.has(row.user_id) || checkedThisRound.has(key)) continue;
+        checkedThisRound.add(key);
+        const done = checkDue(kind, row).finally(() => {
+          checking.delete(row.user_id);
+          startChecks();
+        });
+        checking.set(row.user_id, done);
+        track(done);
+      }
+    } catch (err) {
+      log.error('scheduling status checks failed', { err });
+    }
+  }
+
+  async function checksIdle() {
+    while (checking.size) await Promise.all(checking.values());
+  }
+
+  // Runs every ~30 s: expires confirmations, starts status checks of unknown
+  // payments and open invoices, purges old rows, trims in-memory state. The
+  // returned promise settles when the checks are done (the timer ignores it).
   async function runMaintenance() {
-    if (maintenanceRunning) return;
-    maintenanceRunning = true;
     try {
       const nowMs = now();
       store.expireConfirmations(nowMs);
-      await Promise.all(
-        store
-          .duePayments(nowMs, 10)
-          .map(p =>
-            checkRow('payment', p, reconcilePayment, () =>
-              applyPaymentOutcome(p, { status: 'unknown' }, false),
-            ),
-          ),
-      );
-      await Promise.all(
-        store.dueInvoices(nowMs, 10).map(inv =>
-          checkRow('invoice', inv, reconcileInvoice, () =>
-            store.updateInvoice(inv.id, {
-              status: 'open',
-              checks: inv.checks + 1,
-              nextCheckAt: now() + backoff(inv.checks + 1),
-              now: now(),
-            }),
-          ),
-        ),
-      );
+      checkedThisRound = new Set();
+      startChecks();
       store.purge(nowMs, LIMITS.retentionMs);
       for (const [userId, s] of pinSessions)
         if (s.expiresAt < nowMs) pinSessions.delete(userId);
@@ -2089,9 +2175,8 @@ export function createBot({
         if (nowMs - b.at > 10 * MIN) buckets.delete(key);
     } catch (err) {
       log.error('maintenance failed', { err });
-    } finally {
-      maintenanceRunning = false;
     }
+    return checksIdle();
   }
 
   async function drain(timeoutMs = 10_000) {

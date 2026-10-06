@@ -1692,7 +1692,12 @@ test('pairing: a flood of links cannot block a real user; the check button finds
     const h = createHarness();
     // Throwaway accounts fill every live subscription and most of the table.
     for (const u of [11, 12, 13, 14, 15]) await connectAndPair(h, u);
-    assert.equal(h.wallet.pool.subscriptions(), 2, 'live subscriptions capped');
+    await new Promise(r => setTimeout(r, 10));
+    assert.equal(
+      h.wallet.pool.subscriptions(),
+      1,
+      'live pairings share one subscription',
+    );
 
     await connectAndPair(h, ALICE);
     const link = findUrlButton(h);
@@ -1712,6 +1717,91 @@ test('pairing: a flood of links cannot block a real user; the check button finds
     assert.match(h.tg.lastText(), /Too fast/);
   } finally {
     [LIMITS.maxLivePairings, LIMITS.maxPendingPairings] = saved;
+  }
+});
+
+// A wallet row whose client key Blitz no longer knows: requests to it are
+// dropped silently, so every call times out (as after deleting the
+// connection in Blitz).
+function addDeadWallet(h, userId, methods) {
+  const secret = createFakeWallet().clientSecret;
+  h.store.upsertWallet({
+    userId,
+    walletPubkey: h.wallet.pubkey,
+    relays: [RELAY],
+    secretEnc: h.keyring.encrypt(secret, `${userId}:${h.wallet.pubkey}`),
+    encryption: 'nip44_v2',
+    methods,
+    now: h.clock.now,
+  });
+}
+
+test('relay: a refused subscription means a payment was never sent; reads say busy (M6)', async () => {
+  const h = createHarness({ wallet: payingWallet() });
+  await h.connect(ALICE);
+  h.wallet.pool.refuse = 'error: too many subscriptions';
+  await pay(h, ALICE, newInvoice(h.wallet).invoice);
+  assert.equal(h.wallet.pool.published.length, 0);
+  assert.match(h.tg.lastText(), /didn't work\. Blitz didn't get the payment/);
+  assert.equal(h.store.inFlightPaymentCount(ALICE), 0, 'nothing to reconcile');
+  await h.say(ALICE, '/balance');
+  assert.match(h.tg.lastText(), /busy/);
+});
+
+test('maintenance: dead wallets hold one check each, never others’ (M6)', async () => {
+  const h = createHarness({ wallet: invoicingWallet() });
+  await h.connect(ALICE);
+  await h.say(ALICE, '/receive 1000');
+  const made = h.wallet.made[0];
+  h.wallet.handlers.lookup_invoice = () => ({
+    result: { type: 'incoming', state: 'settled', preimage: made.preimage },
+  });
+  // Three dead wallets with 15 checks due ahead of Alice's: more than a
+  // whole round used to take.
+  for (const u of [1, 2, 3]) {
+    addDeadWallet(h, u, ['make_invoice', 'lookup_invoice']);
+    for (let i = 0; i < 5; i++)
+      h.store.createInvoice({
+        id: `dead${u}-${i}`,
+        userId: u,
+        paymentHash: newPreimage().paymentHash,
+        amountMsat: 1000,
+        expiresAt: h.clock.now + 3600_000,
+        nextCheckAt: h.clock.now - 1000,
+        now: h.clock.now - 1000,
+      });
+  }
+  h.clock.now += 61_000;
+  const done = h.bot.runMaintenance();
+  await new Promise(r => setTimeout(r, 50)); // dead checks take 150 ms each
+  assert.equal(h.store.recentInvoices(ALICE)[0].status, 'paid');
+  await done;
+  for (const u of [1, 2, 3])
+    for (const inv of h.store.recentInvoices(u))
+      assert.ok(inv.next_check_at > h.clock.now, 'each dead row checked once');
+});
+
+test('wallet slots: background checks run even when interactive calls fill the cap (M6)', async () => {
+  const saved = LIMITS.maxConcurrentWalletCalls;
+  LIMITS.maxConcurrentWalletCalls = 1;
+  try {
+    const h = createHarness({ wallet: invoicingWallet() });
+    await h.connect(ALICE);
+    await h.say(ALICE, '/receive 1000');
+    const made = h.wallet.made[0];
+    h.wallet.handlers.lookup_invoice = () => ({
+      result: { type: 'incoming', state: 'settled', preimage: made.preimage },
+    });
+    addDeadWallet(h, BOB, ['get_balance']);
+    const bob = h.say(BOB, '/balance'); // holds the only slot until timeout
+    await new Promise(r => setTimeout(r, 10));
+    h.clock.now += 61_000;
+    await h.bot.runMaintenance();
+    assert.equal(h.store.recentInvoices(ALICE)[0].status, 'paid');
+    await bob;
+    assert.match(h.tg.lastText(), /didn't answer/);
+  } finally {
+    LIMITS.maxConcurrentWalletCalls = saved;
   }
 });
 

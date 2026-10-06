@@ -26,9 +26,9 @@ Telegram user ⇄ Telegram ⇄ (long polling) bot ⇄ Nostr relay ⇄ Blitz Wall
 | ----------------- | ------------------------------------------------------------------------------------------- |
 | `src/index.js`    | Startup, key rotation, crash recovery, polling, graceful shutdown                           |
 | `src/config.js`   | Validated configuration (fails fast)                                                        |
-| `src/telegram.js` | Bot API client + long polling (no inbound port)                                             |
-| `src/bot.js`      | Commands, confirmation + PIN, payment state machine, reconciler, rate limits                |
-| `src/nwc.js`      | Connection-string parsing, relay allowlist, NIP-44/04, request signing, response validation |
+| `src/telegram.js` | Bot API client, long polling (no inbound port), paced send queue with priorities            |
+| `src/bot.js`      | Commands, confirmation + PIN, payment state machine, background checks, rate limits         |
+| `src/nwc.js`      | Connection strings, relay allowlist, shared relay subscriptions, NIP-44/04, signing, checks |
 | `src/invoice.js`  | BOLT11 validation and preimage verification                                                 |
 | `src/db.js`       | SQLite schema, migrations and all queries (parameterized)                                   |
 | `src/crypto.js`   | AES-256-GCM keyring, scrypt PIN hashing                                                     |
@@ -138,7 +138,8 @@ Payments always show amount, the recipient's memo and expiry, and require
 - Paid = the wallet returned a preimage whose SHA-256 equals the invoice's
   payment hash (or `lookup_invoice` reports `settled`).
 - Failed = a NIP-47 error that guarantees nothing was sent (`QUOTA_EXCEEDED`,
-  `INSUFFICIENT_BALANCE`, `PAYMENT_FAILED`, …) or, after the request's
+  `INSUFFICIENT_BALANCE`, `PAYMENT_FAILED`, …), the relay refused the bot's
+  subscription so the request was never published, or, after the request's
   `expiration` plus 2 minutes, the wallet has no record of it.
 - **Unknown** = anything else (timeout, `INTERNAL`, crash). Users are told not
   to pay again; the bot reconciles with `lookup_invoice` (1 min → 6 h backoff,
@@ -170,9 +171,10 @@ polling). Run exactly **one instance per bot token** (Telegram allows one
 npm test
 ```
 
-69 tests (`node:test`) run against an in-memory database, a fake Telegram API,
+100 tests (`node:test`) run against an in-memory database, a fake Telegram API,
 and a fake relay + Blitz-like wallet that uses real nostr signing and NIP-44
-encryption. Covered: inline mode (no wallet calls while typing, invoice on
+encryption. The fake relay replays stored events, sends EOSE, and can refuse
+or drop subscriptions. Covered: inline mode (no wallet calls while typing, invoice on
 selection, private errors, isolation, paying posted invoices), NWC-08 pairing (link contents, approval, forged/wrong-state
 events, relay allowlist, replacement, expiry), authorization and allowlist, groups, user isolation and
 forged callbacks, connection (valid/invalid/revoked/unauthorized), disconnect
@@ -181,7 +183,10 @@ reconciliation, NOT_FOUND grace, restart recovery, duplicate and concurrent
 confirmations, PIN lockout), invoices (creation, paid, expired, amount
 mismatch, caps), balance, transactions pagination, rate limiting, relay
 allowlist/SSRF, response forgery, encryption negotiation, key rotation, and
-that secrets/PINs never appear in logs or Telegram output.
+that secrets/PINs never appear in logs or Telegram output. Load and abuse:
+shared and reused relay subscriptions, refused or dropped subscriptions,
+dead wallets in the background check pool, wallet call caps, and Telegram send
+priority.
 
 Not covered automatically: a live run against a real Blitz Wallet and
 Telegram (needs a bot token and a funded test wallet) — do this before
@@ -194,10 +199,18 @@ Logs are JSON lines on stdout. Useful signals:
 - `payment outcome` with `status: unknown` — rising counts mean relay or
   wallet delivery problems.
 - `wrong payment pin` with `locked: true` — possible account takeover attempts.
+- `relay closed the pairing subscription` / `relay closed a response
+  subscription` (with `reason`) — the relay refused or dropped a subscription.
+  A dropped socket gives one burst of these; a steady stream with a reason
+  like "too many subscriptions" or "rate-limited" means the relay is limiting
+  the bot.
+- `telegram call failed` with `(429)` — Telegram's send quota stayed full
+  through the retries, so a message was lost.
 - `telegram poll failed` — Telegram/API connectivity.
 - `cannot decrypt wallet secret` — key misconfiguration (missing old key during
   rotation).
-- `maintenance failed`, `unhandled rejection`, `uncaught exception` — bugs.
+- `maintenance failed`, `scheduling status checks failed`, `unhandled
+  rejection`, `uncaught exception` — bugs.
 
 Key rotation: prepend a new key (`k2:…,k1:…`), restart (rows are re-encrypted
 at startup and the count is logged as `rotated`), then remove `k1` and restart.

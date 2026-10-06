@@ -89,7 +89,7 @@ export function createFakeWallet({ encryption = 'nip44_v2' } = {}) {
   const stored = []; // what the relay keeps, for querySync
   const wire = ev => JSON.parse(JSON.stringify(ev)); // no cached "verified" flag
   const emit = ev => {
-    stored.push(ev);
+    if (ev.kind < 20000 || ev.kind >= 30000) stored.push(ev); // not ephemeral
     for (const s of subs) if (matches(s.filter, ev)) s.onevent(wire(ev));
   };
 
@@ -117,10 +117,33 @@ export function createFakeWallet({ encryption = 'nip44_v2' } = {}) {
     querySync: async (relays, filter) =>
       stored.filter(ev => matches(filter, ev)).map(wire),
     subscriptions: () => subs.size,
-    subscribe(relays, filter, { onevent }) {
-      const s = { filter, onevent };
-      subs.add(s);
-      return { close: () => subs.delete(s) };
+    refuse: null, // set to a reason: new REQs get CLOSED, like a full relay
+    // Like nostr-tools: stored matches, then EOSE. onclose follows a refusal
+    // (right after oneose), a relay CLOSED or dropped socket, and our own
+    // close (which is async).
+    subscribe(relays, filter, { onevent, oneose, onclose }) {
+      const s = { filter, onevent, open: true };
+      s.close = reason => {
+        if (!s.open) return;
+        s.open = false;
+        subs.delete(s);
+        onclose?.([{ url: RELAY, reason }]);
+      };
+      queueMicrotask(() => {
+        if (!s.open) return;
+        if (pool.refuse) {
+          oneose?.();
+          return s.close(pool.refuse);
+        }
+        subs.add(s);
+        for (const ev of stored) if (matches(filter, ev)) onevent(wire(ev));
+        oneose?.();
+      });
+      return { close: () => queueMicrotask(() => s.close('closed by caller')) };
+    },
+    // The relay ends every open subscription (CLOSED, or the socket drops).
+    closeAll(reason = 'relay restarted') {
+      for (const s of [...subs]) s.close(reason);
     },
     get: async () =>
       finalizeEvent(

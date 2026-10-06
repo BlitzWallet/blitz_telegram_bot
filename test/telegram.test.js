@@ -76,3 +76,30 @@ test('telegram: 429 waits retry_after and retries instead of dropping (M6)', asy
   assert.deepEqual(await tg.call('sendMessage', {}), { message_id: 1 });
   assert.equal(n, 2);
 });
+
+test('telegram: messages are paced, payment results jump the queue, low ones drop under backlog (M6)', async () => {
+  const order = [];
+  const tg = createTelegram({
+    token: TOKEN,
+    log,
+    sendsPerSecond: 10,
+    fetchImpl: async (url, init) => {
+      order.push(JSON.parse(init.body).text);
+      return { status: 200, json: async () => ({ ok: true, result: {} }) };
+    },
+  });
+  const say = (text, priority) =>
+    tg.call('sendMessage', { text }, { priority });
+  const normal = Array.from({ length: 12 }, (_, i) => say(`n${i}`));
+  const high = say('paid', 'high');
+  const low = say('slow down', 'low');
+  assert.equal(await low, null, 'dropped while others wait');
+  await Promise.all([...normal, high]);
+  // A burst of 10 goes at once; the result is next, ahead of n10 and n11.
+  assert.deepEqual(order.slice(9), ['n9', 'paid', 'n10', 'n11']);
+  assert.ok(!order.includes('slow down'));
+  // With nothing queued, a low-priority message goes out.
+  await new Promise(r => setTimeout(r, 200));
+  await say('slow down', 'low');
+  assert.equal(order.at(-1), 'slow down');
+});

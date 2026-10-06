@@ -73,8 +73,13 @@ wallet. Only deleting the connection in Blitz revokes the credential —
   unanswered (Blitz drops events from unknown clients silently) or return
   `UNAUTHORIZED` (other wallets). The bot reports this as "wallet not
   responding or connection removed" and never as a payment failure.
-- **Wallet offline / relay down:** request times out → read ops show "wallet
-  didn't respond"; payments enter `unknown` and are reconciled.
+- **Wallet offline:** request times out → read ops show "wallet didn't
+  respond"; payments enter `unknown` and are reconciled.
+- **Relay refuses or drops a subscription:** the bot sees the close event
+  instead of waiting for a timeout (§10). A request is only published after the
+  relay has confirmed its response subscription (EOSE), so a refusal means the
+  request never left: reads say "busy" and a payment fails as "not sent". A drop
+  after publishing fails the call at once; a payment becomes `unknown`.
 - **Response authentication:** the bot accepts a response only if it is kind
   23195, has a valid signature, is authored by the wallet pubkey from the
   connection string, `p`-tags our client pubkey, `e`-tags our request id,
@@ -216,6 +221,8 @@ convenience risk).
         │ Confirm + correct PIN (atomic CAS; one in-flight per user)
         ▼
    submitting  ── row durably written with request id + expiration BEFORE publish
+        ├── relay refused the response subscription,
+        │   so nothing was published ─────────────────────► failed ("never sent")
         │ publish + wait (60 s)
         ├── result, sha256(preimage)==hash ───────────► paid
         ├── definitive error (QUOTA_EXCEEDED, INSUFFICIENT_BALANCE,
@@ -311,7 +318,10 @@ the wallet row and all of the user's payments and invoices immediately
 | Failure                                    | Behavior                                                                                                               |
 | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
 | Telegram API down                          | Polling backs off and retries; payment state is in the DB, notifications are sent when Telegram returns (best-effort). |
-| Relay down / wallet offline / phone asleep | Request times out; reads say so; payments → `unknown` → reconciled.                                                    |
+| Wallet offline / phone asleep              | Request times out; reads say so; payments → `unknown` → reconciled.                                                    |
+| Relay refuses or drops a subscription      | Seen at once from the close event; relay pings catch dead sockets. Pairing watches reopen with backoff (approvals are stored events, so none are missed). Calls fail fast: refused before publishing → reads "busy", payment "not sent"; dropped after → payment `unknown` → reconciled. |
+| Dead wallets (connection deleted in Blitz) | Each holds one place in the background check pool (one check per user at a time) and backs off; other users' checks keep running. |
+| Telegram send quota full                   | Messages leave one queue paced at 25/s: payment results first, "slow down"-type replies dropped while it is backed up; a 429 waits `retry_after` and retries. |
 | Connection revoked                         | No response (Blitz) or `UNAUTHORIZED`: user told the connection may have been removed.                                 |
 | Invalid / expired invoice                  | Rejected before confirmation; re-checked at Confirm time.                                                              |
 | Bot restart / crash                        | `submitting` rows → `unknown`; reconciler resumes; open invoices resume schedule; awaiting confirmations expire.       |
@@ -325,7 +335,23 @@ the wallet row and all of the user's payments and invoices immediately
 
 - Per-user token buckets: 40 updates burst / 30 per min (keypad taps are
   updates); wallet-touching commands 4 burst / 8 per min (each one wakes the
-  user's phone). Global cap of 100 concurrent wallet requests.
+  user's phone); 3 pairing links burst / 6 per hour.
+- Shared capacity, so a handful of accounts can't starve everyone (M6):
+  - Interactive wallet calls: up to 500 at once and 2 per user. Each user's
+    updates run one at a time, so holding the cap takes about 500 accounts
+    with dead wallets.
+  - Background status checks: their own pool of 50, outside that cap. One check
+    per user at a time, payments first, then oldest due. Each finished check
+    starts the next instead of a round waiting for its slowest wallet, and a
+    row runs at most once per 30 s tick.
+  - Relay subscriptions: pending pairings share subscriptions of up to 100
+    keys (5,000 watched; beyond that, the "I've approved it" button looks the
+    approval up). Each client key has one response subscription, reused across
+    calls and closed after 30 s idle. The Blitz relay (alby-nwc-relay 2.0.0)
+    publishes no NIP-11 limits, but accepted 1,100 subscriptions on one socket
+    when probed on 2026-10-06.
+  - Telegram: one paced send queue (§10); "slow down", "private" and "unknown
+    command" replies are dropped while it is backed up.
 - One pending payment confirmation per user (a new one supersedes the old),
   which also bounds rows created by invoice spam.
 - PIN lockout (10 wrong tries, then locks of 1 min, 5 min, 15 min, 30 min, 1 h, 5 h and 24 h, then sending is off until re-pairing), persisted.
@@ -344,10 +370,10 @@ the wallet row and all of the user's payments and invoices immediately
  Telegram user ──(TLS)── Telegram servers ──getUpdates/sendMessage (HTTPS, bot token)──┐
                                                                                        │
                      ┌──────────────────────── Blitz Telegram Bot (one process) ───────┴──┐
-                     │ telegram.js  Bot API client + long polling                         │
+                     │ telegram.js  Bot API client, long polling, paced send queue        │
                      │ bot.js       commands, callbacks, confirmation, PIN, rate limits   │
                      │ payments     state machine + reconciler (in bot.js)                │
-                     │ nwc.js       URI parsing, NIP-44/04, request/response validation   │
+                     │ nwc.js       URI parsing, NIP-44/04, shared relay subscriptions    │
                      │ db.js        SQLite + migrations    crypto.js  AES-GCM keyring, PIN │
                      │ log.js       redacting JSON logger  config.js  validated config    │
                      └───────────────┬──────────────────────────────────────────────────────┘
@@ -395,6 +421,7 @@ everything); (4) bot process ↔ its DB/key/env (DB alone is not enough; DB + ke
 | Bot host network        | Malicious user                 | `relay=` to internal URL         | SSRF                                                  | Relay allowlist, wss only                                                                       | —                                                          |
 | User                    | Scammer                        | Malicious invoice / fake support | Pays attacker                                         | Confirmation with amount, memo labelled as recipient-written, PIN, help warnings                | Social engineering remains possible                        |
 | Bot                     | Spammer                        | Flood commands                   | Resource use, phone push spam                         | Rate limits, caps                                                                               | —                                                          |
+| Other users' service    | A few accounts / dead wallets  | Hold call slots, checks, quota   | Busy replies, late notices, payments "unknown"        | Generous call cap, fair background pool, shared relay subscriptions, close handling, send priority (§11) | Needs ~500 accounts to fill the call cap        |
 
 ## 14. Commands (Telegram UX)
 
@@ -530,16 +557,22 @@ exists only in bot memory until approval, then only encrypted in the DB.
 3. On approval Blitz stores a connection keyed to the bot's public key (no
    secret on the phone) and publishes its 13194 info event with
    `["p", botKey]`, `["state", state]` and `["relay", blitzRelay]`.
-4. The bot, subscribed to `{kinds:[13194], #p:[botKey]}`, accepts the event
-   only with a valid signature, matching `p` and `state`, and relays on its
-   allowlist. The signer becomes the wallet pubkey; granted methods come from
+4. The bot watches `{kinds:[13194], #p:[botKey, …]}`. Pending links share
+   subscriptions of up to 100 keys. One that the relay closes is reopened
+   with backoff, and because the approval is a stored event the new REQ still
+   finds it. The "I've approved it" button looks the approval up directly. The
+   bot accepts the event only with a valid signature, matching `p` and
+   `state`, and relays on its allowlist. The signer becomes the wallet pubkey; granted methods come from
    the event content. No `get_info` round trip, because the push backend can
    take a few seconds to start routing a new connection.
 
 **Properties**
 
 - Links expire after 15 minutes; a new `/connect` or `/disconnect` cancels the
-  pending one; at most one per user and 1000 globally. A restart forgets
+  pending one; at most one per user. Up to 5,000 are watched on the relay;
+  beyond that (up to 100,000 in memory) a link is confirmed with the button,
+  so a flood of links can delay the automatic notice but never block pairing.
+  A restart forgets
   pending links — an approval that arrives later creates a connection in Blitz
   whose secret no longer exists anywhere (useless to everyone; the user
   deletes it).

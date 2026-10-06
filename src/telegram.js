@@ -10,14 +10,67 @@ export class TelegramError extends Error {
   }
 }
 
-export function createTelegram({ token, fetchImpl = fetch, log }) {
+// Methods that send or change messages share the bot's global quota (about
+// 30 a second). They leave through one paced queue: payment results
+// ('high') first, and replies like "slow down" ('low') are dropped while
+// anything else waits, so a flood can't delay a payment notice (M6).
+const QUEUED = new Set([
+  'sendMessage',
+  'editMessageText',
+  'deleteMessage',
+  'deleteMessages',
+  'leaveChat',
+]);
+const LEVEL = { high: 0, low: 2 }; // anything else is normal (1)
+
+export function createTelegram({
+  token,
+  fetchImpl = fetch,
+  log,
+  sendsPerSecond = 25,
+}) {
   const base = `https://api.telegram.org/bot${token}/`;
+  const queues = [[], [], []];
+  let tokens = sendsPerSecond;
+  let refilledAt = Date.now();
+  let timer = null;
+
+  // Resolves true when the message may go out, false when it is dropped.
+  function turn(priority) {
+    const level = LEVEL[priority] ?? 1;
+    if (level === 2 && queues.some(q => q.length))
+      return Promise.resolve(false);
+    return new Promise(resolve => {
+      queues[level].push(resolve);
+      pump();
+    });
+  }
+
+  function pump() {
+    const t = Date.now();
+    tokens = Math.min(
+      sendsPerSecond,
+      tokens + ((t - refilledAt) * sendsPerSecond) / 1000,
+    );
+    refilledAt = t;
+    for (let q; tokens >= 1 && (q = queues.find(q => q.length)); tokens--)
+      q.shift()(true);
+    if (!timer && queues.some(q => q.length))
+      timer = setTimeout(
+        () => {
+          timer = null;
+          pump();
+        },
+        ((1 - tokens) * 1000) / sendsPerSecond,
+      );
+  }
 
   // A 429 means the bot's send quota is momentarily full (possibly because
   // other users are flooding it). Wait it out instead of dropping the message,
   // so payment results still arrive (M6).
   async function call(method, params = {}, opts = {}) {
     for (let attempt = 1; ; attempt++) {
+      if (QUEUED.has(method) && !(await turn(opts.priority))) return null;
       try {
         return await callOnce(method, params, opts);
       } catch (err) {

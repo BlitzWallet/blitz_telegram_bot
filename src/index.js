@@ -63,8 +63,14 @@ async function main() {
   const recovered = store.recoverSubmitting(Date.now());
   log.info('starting', { rotated, recoveredPayments: recovered });
 
-  const pool = new SimplePool();
-  const nwc = createNwcClient({ pool, allowedRelays: config.allowedRelays });
+  // Pings find a silently dead socket; closing it reports every subscription
+  // closed, so the NWC client reopens pairing watches and fails calls fast.
+  const pool = new SimplePool({ enablePing: true });
+  const nwc = createNwcClient({
+    pool,
+    allowedRelays: config.allowedRelays,
+    log,
+  });
   const tg = createTelegram({ token: config.telegramToken, log });
   const me = await tg.call('getMe');
   config.botUsername = me.username; // shown in Blitz's approval screen

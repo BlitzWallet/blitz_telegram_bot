@@ -404,23 +404,100 @@ test('nwc: ignores responses not signed by the wallet, for other requests, or ta
     NwcTimeoutError,
   );
 
+  // The response subscription is reused per key, so each phase gets a fresh
+  // client to pick up the tampering relay.
   w.handlers.get_balance = () => ({ result: { balance: 5 } });
   const origSub = w.pool.subscribe;
   w.pool.subscribe = (relays, filter, params) =>
     origSub(relays, filter, {
+      ...params,
       onevent: ev =>
         params.onevent({ ...ev, content: ev.content.slice(0, -4) + 'AAAA' }),
     });
+  const tampered = createNwcClient({ pool: w.pool, allowedRelays: [RELAY] });
   await assert.rejects(
-    nwc.call(connOf(w), 'get_balance', {}, { timeoutMs: 150 }),
+    tampered.call(connOf(w), 'get_balance', {}, { timeoutMs: 150 }),
     NwcTimeoutError,
   );
   w.pool.subscribe = origSub;
 
-  w.handlers.get_balance = () => ({ result: { balance: 5 } });
+  const clean = createNwcClient({ pool: w.pool, allowedRelays: [RELAY] });
+  assert.deepEqual(
+    await clean.call(connOf(w), 'get_balance', {}, { timeoutMs: 500 }),
+    { result: { balance: 5 } },
+  );
+});
+
+test('nwc: pending pairings share one subscription, reopened after the relay closes it (M6)', async () => {
+  const { generateSecretKey, getPublicKey } = await import('nostr-tools/pure');
+  const w = createFakeWallet();
+  const nwc = createNwcClient({ pool: w.pool, allowedRelays: [RELAY] });
+  const pairing = () => ({
+    clientPubkey: getPublicKey(generateSecretKey()),
+    state: randomBytes(16).toString('hex'),
+    relays: [RELAY],
+  });
+  const link = p =>
+    `https://blitzwallet.app/nwc/auth?pubkey=${p.clientPubkey}&state=${p.state}&request_methods=get_balance`;
+  const a = pairing();
+  const b = pairing();
+  const waitA = nwc.waitForPairing(a, { timeoutMs: 5000 });
+  const waitB = nwc.waitForPairing(b, { timeoutMs: 5000 });
+  await new Promise(r => setTimeout(r, 10));
+  assert.equal(w.pool.subscriptions(), 1);
+
+  // Approved while the relay had dropped us: found when the watch reopens.
+  w.pool.closeAll();
+  w.approvePairing(link(a));
+  assert.equal((await waitA).walletPubkey, w.pubkey);
+  w.approvePairing(link(b));
+  assert.equal((await waitB).walletPubkey, w.pubkey);
+  await new Promise(r => setTimeout(r, 10));
+  assert.equal(w.pool.subscriptions(), 0, 'closed once nothing is pending');
+});
+
+test('nwc: calls share one response subscription per key, reused across calls (M6)', async () => {
+  const w = createFakeWallet();
+  const nwc = createNwcClient({ pool: w.pool, allowedRelays: [RELAY] });
+  const opts = { timeoutMs: 500 };
+  await Promise.all([
+    nwc.call(connOf(w), 'get_balance', {}, opts),
+    nwc.call(connOf(w), 'get_balance', {}, opts),
+  ]);
+  await nwc.call(connOf(w), 'get_balance', {}, opts);
+  assert.equal(w.pool.subscriptions(), 1);
+  assert.equal(w.pool.published.length, 3);
+});
+
+test('nwc: a refused subscription fails fast and publishes nothing; a closed one fails pending calls (M6)', async () => {
+  const w = createFakeWallet();
+  const nwc = createNwcClient({ pool: w.pool, allowedRelays: [RELAY] });
+  w.pool.refuse = 'error: too many subscriptions';
+  const started = Date.now();
+  await assert.rejects(
+    nwc.call(connOf(w), 'get_balance', {}, { timeoutMs: 5000 }),
+    err => err instanceof NwcTimeoutError && err.sent === false,
+  );
+  assert.ok(Date.now() - started < 1000, 'no waiting for the timeout');
+  assert.equal(w.pool.published.length, 0);
+
+  // Accepted, then the relay drops it while the wallet is still working.
+  w.pool.refuse = null;
+  w.handlers.get_balance = () => 'drop';
+  const pending = nwc.call(connOf(w), 'get_balance', {}, { timeoutMs: 5000 });
+  await new Promise(r => setTimeout(r, 20));
+  w.pool.closeAll();
+  await assert.rejects(
+    pending,
+    err => err instanceof NwcTimeoutError && err.sent === true,
+  );
+  assert.ok(Date.now() - started < 1000);
+
+  // The next call opens a new subscription.
+  w.handlers.get_balance = () => ({ result: { balance: 7 } });
   assert.deepEqual(
     await nwc.call(connOf(w), 'get_balance', {}, { timeoutMs: 500 }),
-    { result: { balance: 5 } },
+    { result: { balance: 7 } },
   );
 });
 
