@@ -61,16 +61,16 @@ For local development: `cp env.example .env`, fill it in, and run
 
 ## Configuration
 
-| Variable                                         | Required | Meaning                                                                                                                       |
-| ------------------------------------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_BOT_TOKEN_FILE` | yes      | Bot token. Prefer the `_FILE` form.                                                                                           |
-| `ENCRYPTION_KEYS` / `ENCRYPTION_KEYS_FILE`       | yes      | `id:base64key[,id:base64key…]`. First key encrypts; all decrypt. Prefer `_FILE`.                                              |
-| `DATABASE_PATH`                                  | no       | SQLite file, default `./data/bot.db` (created `0600`, dir `0700`).                                                            |
-| `ALLOWED_RELAYS`                                 | no       | Comma-separated `wss://` relays connections may use. Default `wss://relay.getalbypro.com/blitz` (Blitz's relay).              |
-| `ALLOWED_TELEGRAM_USER_IDS`                      | no       | Restrict the bot to these numeric Telegram ids (private deployments).                                                         |
-| `MAX_PAYMENT_SATS`                               | no       | Bot-side cap per payment, default 1,000,000. The wallet budget is the real limit.                                             |
+| Variable                                         | Required | Meaning                                                                                                                                                                                                  |
+| ------------------------------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_BOT_TOKEN_FILE` | yes      | Bot token. Prefer the `_FILE` form.                                                                                                                                                                      |
+| `ENCRYPTION_KEYS` / `ENCRYPTION_KEYS_FILE`       | yes      | `id:base64key[,id:base64key…]`. First key encrypts; all decrypt. Prefer `_FILE`.                                                                                                                         |
+| `DATABASE_PATH`                                  | no       | SQLite file, default `./data/bot.db` (created `0600`, dir `0700`).                                                                                                                                       |
+| `ALLOWED_RELAYS`                                 | no       | Comma-separated `wss://` relays connections may use. Default `wss://relay.getalbypro.com/blitz` (Blitz's relay).                                                                                         |
+| `ALLOWED_TELEGRAM_USER_IDS`                      | no       | Restrict the bot to these numeric Telegram ids (private deployments).                                                                                                                                    |
+| `MAX_PAYMENT_SATS`                               | no       | Bot-side cap per payment, default 1,000,000. The wallet budget is the real limit.                                                                                                                        |
 | `CONNECT_MONTHLY_BUDGET_SATS`                    | no       | Monthly spending limit the bot asks Blitz for when pairing, default 100,000 (`0` = ask for none). Users can change it in Blitz. Replaces `CONNECT_DAILY_BUDGET_SATS`, which is still read as a fallback. |
-| `LOG_LEVEL`                                      | no       | `debug`/`info`/`warn`/`error`, default `info`.                                                                                |
+| `LOG_LEVEL`                                      | no       | `debug`/`info`/`warn`/`error`, default `info`.                                                                                                                                                           |
 
 Invalid configuration stops the bot at startup with a message that never
 contains secret values.
@@ -200,7 +200,7 @@ Logs are JSON lines on stdout. Useful signals:
   wallet delivery problems.
 - `wrong payment pin` with `locked: true` — possible account takeover attempts.
 - `relay closed the pairing subscription` / `relay closed a response
-  subscription` (with `reason`) — the relay refused or dropped a subscription.
+subscription` (with `reason`) — the relay refused or dropped a subscription.
   A dropped socket gives one burst of these; a steady stream with a reason
   like "too many subscriptions" or "rate-limited" means the relay is limiting
   the bot.
@@ -210,7 +210,7 @@ Logs are JSON lines on stdout. Useful signals:
 - `cannot decrypt wallet secret` — key misconfiguration (missing old key during
   rotation).
 - `maintenance failed`, `scheduling status checks failed`, `unhandled
-  rejection`, `uncaught exception` — bugs.
+rejection`, `uncaught exception` — bugs.
 
 Key rotation: prepend a new key (`k2:…,k1:…`), restart (rows are re-encrypted
 at startup and the count is logged as `rotated`), then remove `k1` and restart.
@@ -237,3 +237,7 @@ payment hashes from the last 7 days.
 **A user's Telegram account compromised:** the user deletes the connection in
 Blitz and terminates other Telegram sessions; then reconnects with a new
 connection.
+
+## License
+
+[Apache-2.0](LICENSE). Report vulnerabilities privately; see [SECURITY.md](SECURITY.md).

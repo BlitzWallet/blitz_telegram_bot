@@ -6,3 +6,15 @@ data/
 .env.*
 
 secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*credentials*.json
+*service-account*.json
+*adminsdk*.json
+.claude/settings.local.json
+.DS_Store
+*.log

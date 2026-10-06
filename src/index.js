@@ -130,7 +130,10 @@ async function main() {
   process.on('SIGTERM', shutdown);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// pm2 runs scripts through its own wrapper (argv[1]) and passes ours in pm_exec_path.
+if (
+  import.meta.url === `file://${process.env.pm_exec_path || process.argv[1]}`
+) {
   main().catch(err => {
     process.stderr.write(`fatal: ${redact(err.message)}\n`);
     process.exit(1);
