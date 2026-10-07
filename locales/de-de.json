@@ -136,10 +136,9 @@
   },
   "transactions": {
     "not_enabled": "Deine Zahlungen zu sehen ist für diese Verbindung aus. Um es einzuschalten, nutze /reconnect.",
-    "received": "Empfangen",
-    "sent": "Bezahlt",
-    "fee": " · Gebühr {{fee}}",
-    "state": " · {{state}}",
+    "when": "Wann",
+    "fee": "Gebühr",
+    "just_now": "Gerade eben",
     "title": "<b>Deine letzten Zahlungen</b> (Seite {{page}})",
     "empty": "Noch keine Zahlungen.",
     "empty_page": "Keine weiteren Zahlungen.",

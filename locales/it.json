@@ -136,10 +136,9 @@
   },
   "transactions": {
     "not_enabled": "Vedere i tuoi pagamenti è spento per questa connessione. Per attivarli, usa /reconnect.",
-    "received": "Ricevuto",
-    "sent": "Pagato",
-    "fee": " · commissione {{fee}}",
-    "state": " · {{state}}",
+    "when": "Quando",
+    "fee": "Commissione",
+    "just_now": "Proprio ora",
     "title": "<b>I tuoi pagamenti recenti</b> (pagina {{page}})",
     "empty": "Ancora nessun pagamento.",
     "empty_page": "Nessun altro pagamento.",

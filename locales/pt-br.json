@@ -136,10 +136,9 @@
   },
   "transactions": {
     "not_enabled": "Ver seus pagamentos está desligado para esta conexão. Para ativar, use /reconnect.",
-    "received": "Recebido",
-    "sent": "Pago",
-    "fee": " · taxa {{fee}}",
-    "state": " · {{state}}",
+    "when": "Quando",
+    "fee": "Taxa",
+    "just_now": "Agora mesmo",
     "title": "<b>Seus pagamentos recentes</b> (página {{page}})",
     "empty": "Ainda sem pagamentos.",
     "empty_page": "Sem mais pagamentos.",

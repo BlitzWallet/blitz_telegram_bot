@@ -136,10 +136,9 @@
   },
   "transactions": {
     "not_enabled": "Ver tus pagos está apagado para esta conexión. Para activarlo, usa /reconnect.",
-    "received": "Recibido",
-    "sent": "Pagado",
-    "fee": " · comisión {{fee}}",
-    "state": " · {{state}}",
+    "when": "Cuándo",
+    "fee": "Comisión",
+    "just_now": "Justo ahora",
     "title": "<b>Tus pagos recientes</b> (página {{page}})",
     "empty": "Aún no hay pagos.",
     "empty_page": "No hay más pagos.",

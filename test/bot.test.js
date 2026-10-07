@@ -841,12 +841,14 @@ test('balance: shows Wallet Connect balance in sats', async () => {
 });
 
 test('transactions: pagination, empty history, no memos shown', async () => {
-  const h = createHarness();
+  const nowSec = 1_700_000_000;
+  const h = createHarness({ clock: { now: nowSec * 1000 } });
+  const ago = [0, 5 * 60, 3 * 3600, 3 * 86400, 2 * 365 * 86400];
   const tx = i => ({
     type: i % 2 ? 'incoming' : 'outgoing',
     amount: 1000 * (i + 1),
     fees_paid: 1000,
-    created_at: 1_700_000_000 + i,
+    created_at: nowSec - (ago[i] ?? 86400 * i),
     description: `secret memo ${i}`,
   });
   const all = Array.from({ length: 13 }, (_, i) => tx(i));
@@ -856,11 +858,15 @@ test('transactions: pagination, empty history, no memos shown', async () => {
   await h.connect(ALICE);
   await h.say(ALICE, '/transactions');
   assert.match(h.tg.lastText(), /page 1/);
+  assert.match(
+    h.tg.lastText(),
+    /<pre>When +sats +Fee\nJust now +-1 +1\n5 minutes ago +\+2\n3 hours ago +-3 +1\n3 days ago +\+4\n2 years ago +-5 +1\n/,
+  );
   assert.doesNotMatch(h.tg.lastText(), /secret memo/);
   assert.ok(h.tg.button('tx:1'));
   await h.pressButton(ALICE, 'tx:1');
   assert.match(h.tg.lastText(), /page 2/);
-  assert.equal(h.tg.lastText().split('\n').length, 2 + 3 + 1); // + width pad
+  assert.equal(h.tg.lastText().split('\n').length, 2 + 1 + 3 + 1); // header row, width pad
   assert.deepEqual(
     h.wallet.requests
       .filter(r => r.method === 'list_transactions')

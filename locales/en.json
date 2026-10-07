@@ -136,10 +136,9 @@
   },
   "transactions": {
     "not_enabled": "Seeing your payments is off for this connection. To turn it on, use /reconnect.",
-    "received": "Received",
-    "sent": "Paid",
-    "fee": " · fee {{fee}}",
-    "state": " · {{state}}",
+    "when": "When",
+    "fee": "Fee",
+    "just_now": "Just now",
     "title": "<b>Your recent payments</b> (page {{page}})",
     "empty": "No payments yet.",
     "empty_page": "No more payments.",

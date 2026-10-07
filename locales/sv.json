@@ -136,10 +136,9 @@
   },
   "transactions": {
     "not_enabled": "Att se dina betalningar är av för den här anslutningen. För att slå på det, använd /reconnect.",
-    "received": "Mottaget",
-    "sent": "Betald",
-    "fee": " · avgift {{fee}}",
-    "state": " · {{state}}",
+    "when": "När",
+    "fee": "Avgift",
+    "just_now": "Just nu",
     "title": "<b>Dina senaste betalningar</b> (sida {{page}})",
     "empty": "Inga betalningar än.",
     "empty_page": "Inga fler betalningar.",

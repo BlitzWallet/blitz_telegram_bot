@@ -136,10 +136,9 @@
   },
   "transactions": {
     "not_enabled": "Voir tes paiements est éteint pour cette connexion. Pour l'activer, utilise /reconnect.",
-    "received": "Reçu",
-    "sent": "Payé",
-    "fee": " · frais {{fee}}",
-    "state": " · {{state}}",
+    "when": "Quand",
+    "fee": "Frais",
+    "just_now": "À l'instant",
     "title": "<b>Tes paiements récents</b> (page {{page}})",
     "empty": "Pas encore de paiements.",
     "empty_page": "Plus de paiements.",

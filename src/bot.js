@@ -206,6 +206,28 @@ const fmtDuration = (ms, locale = 'en') => {
     return `${value} ${unit}${value === 1 ? '' : 's'}`;
   }
 };
+// "Just now" / "5 minutes ago" / "3 days ago", same steps as the Blitz app's
+// getTimeDisplay (minutes up to an hour, hours up to a day, days up to a year).
+const fmtAgo = (sec, nowMs, locale, justNow) => {
+  const min = (nowMs / 1000 - sec) / 60;
+  if (!(min >= 1)) return justNow; // also covers future timestamps
+  const [value, unit] =
+    min <= 60
+      ? [min, 'minute']
+      : min <= 60 * 24
+        ? [min / 60, 'hour']
+        : min <= 60 * 24 * 365
+          ? [min / 1440, 'day']
+          : [min / 525600, 'year'];
+  try {
+    return new Intl.RelativeTimeFormat(locale, { numeric: 'always' }).format(
+      -Math.round(value),
+      unit,
+    );
+  } catch {
+    return new Intl.RelativeTimeFormat('en').format(-Math.round(value), unit);
+  }
+};
 // Few guesses are allowed before sending is turned off, so reject what an
 // attacker would try first: repeats, sequences, keypad patterns and dates.
 const COMMON_PINS = new Set([
@@ -596,7 +618,10 @@ export function createBot({
           return askLanguage(userId, 'connect', msg.from.language_code);
         // Deep link from inline mode's "Type an amount" hint.
         if (args.trim() === 'help')
-          return send(userId, helpFor(localeOf(userId, msg.from.language_code)));
+          return send(
+            userId,
+            helpFor(localeOf(userId, msg.from.language_code)),
+          );
         // From the "Pay" button on an invoice someone posted in a chat.
         if (/^pay_[A-Za-z0-9_-]{1,32}$/.test(args.trim())) {
           return payPosted(userId, args.trim().slice(4));
@@ -1922,27 +1947,44 @@ export function createBot({
 
     // Memos are deliberately not shown: they can hold personal details and
     // Telegram keeps chat history. They remain visible in the Blitz app.
-    const lines = list.slice(0, LIMITS.txPageSize).flatMap(tx => {
+    // Telegram has no table markup, so rows are padded into columns inside a
+    // monospace <pre> block.
+    const locale = localeOf(userId);
+    const rows = list.slice(0, LIMITS.txPageSize).flatMap(tx => {
       const amount = Number(tx.amount);
       if (!Number.isFinite(amount) || amount < 0) return [];
       const when = Number.isFinite(Number(tx.created_at))
-        ? fmtDate(Number(tx.created_at))
+        ? fmtAgo(
+            Number(tx.created_at),
+            now(),
+            locale,
+            t('transactions.just_now'),
+          )
         : t('transactions.unknown_date');
-      const dir =
-        tx.type === 'incoming'
-          ? t('transactions.received')
-          : t('transactions.sent');
+      const sign = tx.type === 'incoming' ? '+' : '-';
       const fee =
         Number(tx.fees_paid) > 0 && tx.type !== 'incoming'
-          ? t('transactions.fee', { fee: fmt(Number(tx.fees_paid)) })
+          ? fmt(Number(tx.fees_paid))
           : '';
       const state = ['pending', 'failed', 'expired'].includes(tx.state)
-        ? t('transactions.state', { state: tx.state })
+        ? tx.state
         : '';
-      return [`${when}  ${dir} <b>${fmt(amount)}</b> sats${fee}${state}`];
+      return [[when, sign + fmt(amount), fee, state]];
     });
-    const text = lines.length
-      ? `${t('transactions.title', { page: page + 1 })}\n\n${lines.join('\n')}`
+    const table = [
+      [t('transactions.when'), 'sats', t('transactions.fee'), ''],
+      ...rows,
+    ];
+    const width = col => Math.max(...table.map(r => r[col].length));
+    const [w0, w1, w2] = [width(0), width(1), width(2)];
+    const text = rows.length
+      ? `${t('transactions.title', { page: page + 1 })}\n\n<pre>${escapeHtml(
+          table
+            .map(([a, b, c, d]) =>
+              `${a.padEnd(w0)}  ${b.padStart(w1)}  ${c.padStart(w2)}  ${d}`.trimEnd(),
+            )
+            .join('\n'),
+        )}</pre>`
       : page === 0
         ? t('transactions.empty')
         : t('transactions.empty_page');
