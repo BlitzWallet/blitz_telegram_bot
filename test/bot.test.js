@@ -68,7 +68,7 @@ test('start/help: intro only on /start, command list only on /help', async () =>
   assert.match(sentTexts(n)[0], /Stay safe/);
   assert.ok(n.tg.button('cn:go'), 'intro has a Connect button');
   await n.pressButton(ALICE, 'cn:go');
-  assert.match(n.tg.lastText(), /Pick your language/);
+  assert.match(n.tg.lastText(), /Choose your language/);
   await n.pressButton(ALICE, 'lg:en');
   assert.ok(findUrlButton(n), 'button leads into pairing');
 
@@ -85,11 +85,11 @@ test('start/help: intro only on /start, command list only on /help', async () =>
 test('auth: unconnected user is told to connect; allowlist blocks unknown users', async () => {
   const h = createHarness();
   await h.say(ALICE, '/balance');
-  assert.match(h.tg.lastText(), /First, connect your Blitz app/);
+  assert.match(h.tg.lastText(), /First, connect your Wallet Connect account/);
 
   const p = createHarness({ config: { allowedUsers: new Set([ALICE]) } });
   await p.say(BOB, '/balance');
-  assert.equal(p.tg.lastText(), 'Sorry, this bot is private.');
+  assert.equal(p.tg.lastText(), 'I only work for approved accounts.');
   await p.say(BOB, p.wallet.connectionString);
   assert.ok(
     p.tg.calls.some(c => c.method === 'deleteMessage'),
@@ -137,7 +137,7 @@ test('connect: stores only an encrypted secret and sets a PIN', async () => {
       .decrypt(row.pin_hash, `pin:${ALICE}:${h.wallet.pubkey}`)
       .startsWith('scrypt.'),
   );
-  assert.match(h.tg.lastText(), /🔐 PIN saved/);
+  assert.match(h.tg.lastText(), /✅ PIN saved/);
 });
 
 test('connect: a pasted connection string is deleted, never used, and flagged', async () => {
@@ -181,10 +181,10 @@ test('connect: receive-only connection disables sending', async () => {
   assert.ok(!h.tg.button('k:'), 'no PIN prompt without pay_invoice');
   assert.match(
     h.tg.lastText(),
-    /You're connected![\s\S]*• See your balance\n• Ask others for money/,
+    /You're connected![\s\S]*• See your balance\n• Ask for money/,
   );
   assert.doesNotMatch(h.tg.lastText(), /Pay people/);
-  assert.match(h.tg.lastText(), /switched off/);
+  assert.match(h.tg.lastText(), /permissions are off/);
   await h.say(ALICE, newInvoice(h.wallet).invoice);
   assert.match(h.tg.lastText(), /Paying is off/);
 });
@@ -199,7 +199,7 @@ test('disconnect deletes everything; reconnect works and resets the PIN', async 
   assert.equal(h.store.recentPayments(ALICE).length, 0);
   assert.match(h.tg.lastText(), /Also delete the Telegram connection/);
   await h.say(ALICE, '/balance');
-  assert.match(h.tg.lastText(), /First, connect your Blitz app/);
+  assert.match(h.tg.lastText(), /First, connect your Wallet Connect account/);
 
   await h.connect(ALICE, '135790');
   assert.ok(h.store.getWallet(ALICE).pin_hash);
@@ -228,7 +228,7 @@ test('isolation: a user cannot confirm, cancel or check another user’s items',
   assert.match(h.tg.lastText(), /not watching that one anymore/);
   // Bob's commands never use Alice's connection.
   await h.say(BOB, '/balance');
-  assert.match(h.tg.lastText(), /First, connect your Blitz app/);
+  assert.match(h.tg.lastText(), /First, connect your Wallet Connect account/);
   assert.equal(payRequests(h.wallet).length, 0);
 });
 
@@ -318,7 +318,7 @@ test('payment: cancel sends nothing; confirmation expires', async () => {
   await h.connect(ALICE);
   await h.say(ALICE, newInvoice(h.wallet).invoice);
   await h.pressButton(ALICE, 'px:');
-  assert.match(h.tg.lastText(), /Stopped\. No money was sent/);
+  assert.match(h.tg.lastText(), /Cancelled\. No money was sent/);
   await h.pressButton(ALICE, 'pc:');
   assert.match(h.tg.lastText(), /took too long/);
 
@@ -645,7 +645,7 @@ test('payment: revoked connection reports a clear, non-failed state', async () =
   await pay(h, ALICE, newInvoice(h.wallet).invoice);
   assert.equal(h.store.recentPayments(ALICE)[0].status, 'unknown');
   await h.say(ALICE, '/balance');
-  assert.match(h.tg.lastText(), /Blitz didn't answer/);
+  assert.match(h.tg.lastText(), /Blitz app didn't answer/);
 });
 
 test('classifiers: pure state mapping', () => {
@@ -724,7 +724,7 @@ test('receive: creates an invoice, tracks it, notifies when paid', async () => {
   );
   assert.equal(
     h.tg.lastText(),
-    'Tap Copy, then send it to the person who will pay you.\n' +
+    'Tap <b>Copy payment request</b>, then send it to the person who will pay you.\n' +
       '\u2800'.repeat(36),
   );
   const copyParams = h.tg.calls
@@ -776,7 +776,7 @@ test('receive: invoice expires unpaid; wallet invoice with wrong amount is refus
   });
   h.clock.now = Date.now();
   await h.say(ALICE, '/receive 1000');
-  assert.match(h.tg.lastText(), /Oops/);
+  assert.match(h.tg.lastText(), /That didn't work/);
 });
 
 test('receive: bare /receive asks for the amount; the next message answers', async () => {
@@ -828,7 +828,7 @@ test('receive: usage errors and open-invoice cap', async () => {
     await h.say(ALICE, '/receive 10');
   }
   await h.say(ALICE, '/receive 10');
-  assert.match(h.tg.lastText(), /open requests/);
+  assert.match(h.tg.lastText(), /open payment requests/);
 });
 
 // ------------------------------------------------------------ balance & history
@@ -837,7 +837,7 @@ test('balance: shows Wallet Connect balance in sats', async () => {
   const h = createHarness();
   await h.connect(ALICE);
   await h.say(ALICE, '/balance');
-  assert.match(h.tg.lastText(), /^You have <b>21,000 sats<\/b>\.$/);
+  assert.match(h.tg.lastText(), /^Your Wallet Connect balance is <b>21,000 sats<\/b>\.$/);
 });
 
 test('transactions: pagination, empty history, no memos shown', async () => {
@@ -904,7 +904,7 @@ test('security: unexpected errors give a generic reply', async () => {
   await h.say(ALICE, '/balance');
   assert.equal(
     h.tg.lastText(),
-    'Oops, something went wrong. Please try again.',
+    "That didn't work. Try again in a moment.",
   );
   assert.ok(!h.allOutput().includes(h.wallet.clientSecret));
 });
@@ -921,7 +921,7 @@ test('security: rate limiting caps wallet requests per user', async () => {
   );
   // Other users are unaffected.
   await h.say(BOB, '/balance');
-  assert.match(h.tg.lastText(), /First, connect your Blitz app/);
+  assert.match(h.tg.lastText(), /First, connect your Wallet Connect account/);
 });
 
 test('security: unknown commands are not executed', async () => {
@@ -1020,7 +1020,7 @@ test('reconnect: disconnects and sends a new link so new permissions apply', asy
   });
   await settlePairing(h);
   await h.say(ALICE, '/balance');
-  assert.match(h.tg.lastText(), /^You have <b>21,000 sats<\/b>\.$/);
+  assert.match(h.tg.lastText(), /^Your Wallet Connect balance is <b>21,000 sats<\/b>\.$/);
 });
 
 test('reconnect: with no wallet it is just /connect', async () => {
@@ -1103,7 +1103,7 @@ test('pairing: approval stores the connection; the secret never leaves the bot',
   await h.enterPin(ALICE, PIN);
   await h.enterPin(ALICE, PIN);
   await h.say(ALICE, '/balance');
-  assert.match(h.tg.lastText(), /^You have <b>21,000 sats<\/b>\.$/);
+  assert.match(h.tg.lastText(), /^Your Wallet Connect balance is <b>21,000 sats<\/b>\.$/);
   assert.equal(h.wallet.requests.at(-1).event.pubkey, appKey);
 });
 
@@ -1231,7 +1231,7 @@ test('amounts: formatted in the user locale, never US-style for comma-decimal la
 test('language: /connect asks for language first, then pairs in that language', async () => {
   const h = createHarness();
   await h.say(ALICE, '/connect');
-  assert.match(h.tg.lastText(), /Pick your language/);
+  assert.match(h.tg.lastText(), /Choose your language/);
   assert.equal(
     findUrlButton(h),
     null,
@@ -1249,10 +1249,10 @@ test('language: /connect asks for language first, then pairs in that language', 
 test('language: /language switches language without pairing', async () => {
   const h = createHarness();
   await h.say(ALICE, '/language');
-  assert.match(h.tg.lastText(), /Pick your language/);
+  assert.match(h.tg.lastText(), /Choose your language/);
   await h.pressButton(ALICE, 'll:fr');
   assert.equal(h.store.getLocale(ALICE), 'fr');
-  assert.match(h.tg.lastText(), /C'est fait/);
+  assert.match(h.tg.lastText(), /Langue choisie/);
   assert.equal(findUrlButton(h), null, '/language must not start pairing');
   await h.say(ALICE, '/balance');
   assert.match(h.tg.lastText(), /Connecte d'abord/);
@@ -1302,7 +1302,7 @@ test('inline: unconnected users get a connect shortcut, never cached', async () 
   const a = lastInlineAnswer(h);
   assert.deepEqual(a.results, []);
   assert.deepEqual(a.button, {
-    text: 'Connect your Blitz app first',
+    text: 'Connect your account first',
     start_parameter: 'connect',
   });
   assert.equal(a.is_personal, true);
@@ -1327,7 +1327,7 @@ test('inline: typing previews without touching the wallet', async () => {
   assert.equal(result.title, 'Ask for 5,000 sats');
   assert.match(
     result.input_message_content.message_text,
-    /^Ann &lt;Lee&gt; is sending a request for <b>5,000 sats<\/b> — pizza &lt;b&gt;/,
+    /^Ann &lt;Lee&gt; is asking for <b>5,000 sats<\/b> — pizza &lt;b&gt;/,
   );
   assert.ok(
     result.reply_markup.inline_keyboard[0][0],
@@ -1366,7 +1366,7 @@ test('inline: choosing the result creates one invoice, edits the message, notifi
   assert.equal(edit.inline_message_id, 'imid-1');
   assert.equal(
     edit.text,
-    'Ann &lt;Lee&gt; sent a request for <b>5,000 sats</b> — pizza\n' +
+    'Ann &lt;Lee&gt; asked for <b>5,000 sats</b> — pizza\n' +
       '\u2800'.repeat(36),
   );
   assert.ok(!edit.text.includes('lnbc'), 'invoice is not shown in the chat');
@@ -1375,7 +1375,7 @@ test('inline: choosing the result creates one invoice, edits the message, notifi
   const invoice = open.url.split('#open:')[1];
   assert.match(invoice, /^lnbc50000n1/);
   assert.equal(open.url, `https://blitzwalletapp.com/pay#open:${invoice}`);
-  assert.equal(open.text, '⚡ Pay request');
+  assert.equal(open.text, 'Pay with any wallet');
   assert.equal(pay.text, 'Pay with @BlitzTestBot');
   assert.match(pay.callback_data, /^ip:/);
   assert.equal(h.store.recentInvoices(ALICE)[0].status, 'open');
@@ -1426,7 +1426,7 @@ test('inline: without a bot username there is no Pay with the bot button', async
   await chooseInline(h, ALICE, '5000');
   const rows = lastInlineEdit(h).reply_markup.inline_keyboard;
   assert.equal(rows.length, 1);
-  assert.equal(rows[0][0].text, '⚡ Pay request');
+  assert.equal(rows[0][0].text, 'Pay with any wallet');
 });
 
 test('inline: failures stay private and other chats see only a short notice', async () => {
@@ -1434,10 +1434,10 @@ test('inline: failures stay private and other chats see only a short notice', as
   await h.connect(ALICE);
   h.wallet.setOnline(false);
   await chooseInline(h, ALICE, '5000');
-  assert.equal(lastInlineEdit(h).text, "I couldn't make the request.");
+  assert.equal(lastInlineEdit(h).text, "I couldn't create the payment request.");
   const dm = h.tg.calls.filter(c => c.method === 'sendMessage').at(-1).params;
   assert.equal(dm.chat_id, ALICE);
-  assert.match(dm.text, /Blitz didn't answer/);
+  assert.match(dm.text, /Blitz app didn't answer/);
 
   await chooseInline(h, ALICE, 'not an amount');
   assert.match(lastInlineEdit(h).text, /can't ask for that amount/);
@@ -1451,7 +1451,7 @@ test('inline: a user only ever uses their own wallet; allowlist applies', async 
     h.wallet.requests.filter(r => r.method === 'make_invoice').length,
     0,
   );
-  assert.equal(lastInlineEdit(h).text, "I couldn't make the request.");
+  assert.equal(lastInlineEdit(h).text, "I couldn't create the payment request.");
 
   const p = createHarness({ config: { allowedUsers: new Set([ALICE]) } });
   await inlineQuery(p, BOB, '5000');
@@ -1602,12 +1602,12 @@ test('chat pay: own invoice, unknown ids, private-only bots and unconnected paye
     h.tg.calls.filter(c => c.method === 'answerCallbackQuery').at(-1).params;
 
   await pressInline(h, ALICE, data);
-  assert.equal(lastAnswer().text, 'This is your own request.');
+  assert.equal(lastAnswer().text, 'This is your own payment request.');
   await pressInline(h, BOB, 'ip:doesnotexist');
   assert.match(lastAnswer().text, /Already paid or expired/);
 
   await h.say(BOB, `/start pay_${data.slice(3)}`);
-  assert.match(h.tg.lastText(), /First, connect your Blitz app/);
+  assert.match(h.tg.lastText(), /First, connect your Wallet Connect account/);
 
   const p = createHarness({
     wallet: chatWallet(),
@@ -1619,7 +1619,7 @@ test('chat pay: own invoice, unknown ids, private-only bots and unconnected paye
   assert.equal(
     p.tg.calls.filter(c => c.method === 'answerCallbackQuery').at(-1).params
       .text,
-    'Sorry, this bot is private.',
+    'I only work for approved accounts.',
   );
 });
 
@@ -1744,7 +1744,7 @@ test('relay: a refused subscription means a payment was never sent; reads say bu
   h.wallet.pool.refuse = 'error: too many subscriptions';
   await pay(h, ALICE, newInvoice(h.wallet).invoice);
   assert.equal(h.wallet.pool.published.length, 0);
-  assert.match(h.tg.lastText(), /didn't work\. Blitz didn't get the payment/);
+  assert.match(h.tg.lastText(), /didn't work\. The Blitz app didn't get the payment/);
   assert.equal(h.store.inFlightPaymentCount(ALICE), 0, 'nothing to reconcile');
   await h.say(ALICE, '/balance');
   assert.match(h.tg.lastText(), /busy/);

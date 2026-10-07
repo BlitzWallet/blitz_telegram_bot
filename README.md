@@ -86,7 +86,7 @@ back up the encryption key alongside the database.**
 
 ## Using the bot (users)
 
-1. Send `/connect`. Pick your language, then tap **Connect in Blitz** on the phone with Blitz (or scan
+1. Send `/connect`. Pick your language, then tap **Open the Blitz app** on the phone with Blitz (or scan
    the `nostr+walletauth://` text with Blitz on another device). Blitz shows
    what the bot asks for; "Send payments" is off unless you turn it on, and
    sending is capped by the monthly limit shown. Approve.
@@ -101,11 +101,11 @@ back up the encryption key alongside the database.**
 **Request money in any chat (inline mode):** type `@YourBot 5000 pizza` in
 any chat and tap the result. The bot creates the invoice in your Blitz wallet
 and posts a request (sender's name, amount, memo; the invoice text itself is hidden)
-with two buttons: **⚡ Pay request** (opens any Lightning wallet via
+with two buttons: **Pay with any wallet** (opens any Lightning wallet via
 `blitzwalletapp.com/pay`) and **Pay with @bot**, which
 opens the payer's private chat with the bot, where they confirm and enter their
 PIN as for any payment. When it's paid, the
-posted message changes to "✅ paid" and you get a private message. Needs
+posted message changes to "✅ … paid" and you get a private message. Needs
 BotFather `/setinline` (placeholder text) **and** `/setinlinefeedback` →
 Enabled, otherwise Telegram never tells the bot which result was picked.
 

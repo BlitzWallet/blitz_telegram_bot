@@ -257,7 +257,6 @@ const backoff = checks => Math.min(6 * 60 * MIN, MIN * 2 ** checks);
 
 // Per-user text: INTRO/HELP depend on the user's language.
 const introFor = lng => tFor(lng)('intro');
-const helpFor = lng => tFor(lng)('help');
 
 export function createBot({
   tg,
@@ -366,6 +365,9 @@ export function createBot({
   const tu = (userId, tgLang) => tFor(localeOf(userId, tgLang));
   const satsU = userId => (msat, tgLang) =>
     sats(msat, localeOf(userId, tgLang));
+  // The help text names the bot's real @username for inline mode.
+  const helpFor = lng =>
+    tFor(lng)('help', { bot: config.botUsername ?? 'BlitzWalletBot' });
 
   const languageRows = (current, action = 'lg') => {
     const rows = [];
@@ -592,6 +594,9 @@ export function createBot({
         // Deep link from inline mode's "Connect your Blitz Wallet first".
         if (args.trim() === 'connect')
           return askLanguage(userId, 'connect', msg.from.language_code);
+        // Deep link from inline mode's "Type an amount" hint.
+        if (args.trim() === 'help')
+          return send(userId, helpFor(localeOf(userId, msg.from.language_code)));
         // From the "Pay" button on an invoice someone posted in a chat.
         if (/^pay_[A-Za-z0-9_-]{1,32}$/.test(args.trim())) {
           return payPosted(userId, args.trim().slice(4));
