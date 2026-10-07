@@ -1616,6 +1616,8 @@ export function createBot({
 
   async function onInlineQuery(q) {
     const userId = q.from.id;
+    // chat_type only; the query text can hold a personal memo.
+    log.debug('inline query', { user: log.user(userId), chat: q.chat_type });
     const t = tu(userId, q.from.language_code);
     const answer = (results, button) =>
       safe(
