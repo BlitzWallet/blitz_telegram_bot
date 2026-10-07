@@ -184,6 +184,11 @@ const fmtDate = sec =>
 // devices. Too few leaves the buttons narrow, too many wraps into a second
 // blank line.
 const WIDTH_PAD = '\u2800'.repeat(36);
+// Telegram sizes a <pre> block to its longest line, so table rows are padded
+// to this many monospace characters to fill a phone-width bubble.
+// ponytail: fixed estimate (~36 fit on a 6.1" iPhone); too high and rows wrap
+// on small phones, too low leaves a gap on the right.
+const TABLE_WIDTH = 32;
 const padForButtons = (text, markup) =>
   markup?.inline_keyboard?.length ? `${text}\n${WIDTH_PAD}` : text;
 // Telegram renders <tg-time> as a clock time in the viewer's own timezone and
@@ -1965,7 +1970,7 @@ export function createBot({
       const fee =
         Number(tx.fees_paid) > 0 && tx.type !== 'incoming'
           ? fmt(Number(tx.fees_paid))
-          : '';
+          : '-';
       const state = ['pending', 'failed', 'expired'].includes(tx.state)
         ? tx.state
         : '';
@@ -1977,13 +1982,16 @@ export function createBot({
     ];
     const width = col => Math.max(...table.map(r => r[col].length));
     const [w0, w1, w2] = [width(0), width(1), width(2)];
+    // Spare width goes after the date, pushing amounts to the right edge.
+    const gap = ' '.repeat(Math.max(2, TABLE_WIDTH - w0 - w1 - w2 - 2));
+    const line = ([a, b, c, d]) =>
+      `${a.padEnd(w0)}${gap}${b.padStart(w1)}  ${c.padStart(w2)}  ${d}`.trimEnd();
+    const [header, ...body] = table.map(line);
+    const rule = '─'.repeat(Math.max(...table.map(r => line(r).length)));
     const text = rows.length
       ? `${t('transactions.title', { page: page + 1 })}\n\n<pre>${escapeHtml(
-          table
-            .map(([a, b, c, d]) =>
-              `${a.padEnd(w0)}  ${b.padStart(w1)}  ${c.padStart(w2)}  ${d}`.trimEnd(),
-            )
-            .join('\n'),
+          // Blank lines between rows give them room to breathe.
+          [header, rule, body.join('\n\n')].join('\n'),
         )}</pre>`
       : page === 0
         ? t('transactions.empty')

@@ -860,13 +860,13 @@ test('transactions: pagination, empty history, no memos shown', async () => {
   assert.match(h.tg.lastText(), /page 1/);
   assert.match(
     h.tg.lastText(),
-    /<pre>When +sats +Fee\nJust now +-1 +1\n5 minutes ago +\+2\n3 hours ago +-3 +1\n3 days ago +\+4\n2 years ago +-5 +1\n/,
+    /<pre>When +sats +Fee\n─{32}\nJust now +-1 +1\n\n5 minutes ago +\+2 +-\n\n3 hours ago +-3 +1\n\n3 days ago +\+4 +-\n\n2 years ago +-5 +1\n/,
   );
   assert.doesNotMatch(h.tg.lastText(), /secret memo/);
   assert.ok(h.tg.button('tx:1'));
   await h.pressButton(ALICE, 'tx:1');
   assert.match(h.tg.lastText(), /page 2/);
-  assert.equal(h.tg.lastText().split('\n').length, 2 + 1 + 3 + 1); // header row, width pad
+  assert.equal(h.tg.lastText().split('\n').length, 2 + 2 + 3 * 2 - 1 + 1); // header + rule, spaced rows, width pad
   assert.deepEqual(
     h.wallet.requests
       .filter(r => r.method === 'list_transactions')
